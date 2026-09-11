@@ -272,7 +272,7 @@ func freeCommand(message string, kind game.Activity) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimPrefix(fields[0], "!")) {
-	case "status", "runner", "top", "gear", "world":
+	case "status", "runner", "top", "gear", "world", "events":
 		return true
 	default:
 		return false
@@ -313,6 +313,15 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		client.Cmd.Message(target, gearLine(p))
 	case "world":
 		client.Cmd.Message(target, worldLine(b.game.World(), now))
+	case "events":
+		events := b.game.RecentEvents(5)
+		if len(events) == 0 {
+			client.Cmd.Message(target, "[GRID] no recent events logged.")
+			return
+		}
+		for _, message := range events {
+			client.Cmd.Message(target, message)
+		}
 	case "faction":
 		if len(fields) < 2 {
 			client.Cmd.Message(target, "[GRID] choose once: ghostline (safer ICE), chrome (bigger shards), or nomad (smaller ICE losses).")
@@ -325,7 +334,7 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		}
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction locked: %s", p.Faction))
 	case "help":
-		client.Cmd.Message(target, "[GRID] !status/!runner !top !gear !world !faction !help — passive progression; keep chatter out of the game channel.")
+		client.Cmd.Message(target, "[GRID] !status/!runner !top !gear !world !events !faction !help — passive progression; keep chatter out of the game channel.")
 	case "pirate":
 		if !b.isAdmin(account) {
 			client.Cmd.Message(target, "[GRID] admin clearance required.")

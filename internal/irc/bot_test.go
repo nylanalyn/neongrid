@@ -20,7 +20,7 @@ func TestNamesNick(t *testing.T) {
 }
 
 func TestFreeCommand(t *testing.T) {
-	for _, command := range []string{"!status", "!runner", "!top now", "!gear", "!world"} {
+	for _, command := range []string{"!status", "!runner", "!top now", "!gear", "!world", "!events"} {
 		if !freeCommand(command, game.ActivityChat) {
 			t.Errorf("freeCommand(%q) = false", command)
 		}

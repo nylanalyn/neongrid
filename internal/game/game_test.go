@@ -209,3 +209,23 @@ func TestCityEventProgressChangesAreMeaningful(t *testing.T) {
 		t.Fatalf("formatProgressChange(-90) = %q", got)
 	}
 }
+
+func TestRecentEventsReturnsNewestFirst(t *testing.T) {
+	now := time.Unix(7000, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := e.ForcePirate(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.ForcePirate(now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := e.RecentEvents(2)
+	if len(events) != 2 || events[0] != second || events[1] != first {
+		t.Fatalf("recent events = %#v", events)
+	}
+}

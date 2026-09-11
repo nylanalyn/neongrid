@@ -34,6 +34,7 @@ For older IRC endpoints that abort modern TLS negotiation, the bot retries once 
 - `!top` — show the leaderboard
 - `!gear` — show the current equipment loadout
 - `!world` — show pirate-frequency and city-event timing
+- `!events` — show the latest passive event announcements for this bot session
 - `!faction ghostline|chrome|nomad` — permanently choose a lightweight specialization
 - `!help` — show the compact command list
 - `!pirate` — admin-only manual pirate-frequency window

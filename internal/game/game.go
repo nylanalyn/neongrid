@@ -114,12 +114,13 @@ type Repository interface {
 }
 
 type Engine struct {
-	mu    sync.Mutex
-	repo  Repository
-	rules Rules
-	rng   *rand.Rand
-	world WorldState
-	users map[string]*Player
+	mu     sync.Mutex
+	repo   Repository
+	rules  Rules
+	rng    *rand.Rand
+	world  WorldState
+	users  map[string]*Player
+	events []string
 }
 
 func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, error) {
@@ -444,6 +445,7 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			return nil, err
 		}
 	}
+	e.rememberLocked(messages...)
 	return messages, nil
 }
 
@@ -454,7 +456,9 @@ func (e *Engine) ForcePirate(now time.Time) (string, error) {
 	if err := e.repo.SaveWorldState(e.world); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("[GRID] PIRATE FREQUENCY: transmissions are safe for %s.", formatDuration(e.rules.PirateDuration)), nil
+	message := fmt.Sprintf("[GRID] PIRATE FREQUENCY: transmissions are safe for %s.", formatDuration(e.rules.PirateDuration))
+	e.rememberLocked(message)
+	return message, nil
 }
 
 func (e *Engine) Rules() Rules { return e.rules }
@@ -463,6 +467,22 @@ func (e *Engine) World() WorldState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.world
+}
+
+func (e *Engine) RecentEvents(limit int) []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > len(e.events) {
+		limit = len(e.events)
+	}
+	events := make([]string, limit)
+	for i := range events {
+		events[i] = e.events[len(e.events)-1-i]
+	}
+	return events
 }
 
 func PenaltySeconds(level int, kind Activity, length int, rules Rules) int64 {
@@ -579,6 +599,13 @@ func validFaction(faction string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (e *Engine) rememberLocked(messages ...string) {
+	e.events = append(e.events, messages...)
+	if len(e.events) > 20 {
+		e.events = e.events[len(e.events)-20:]
 	}
 }
 
