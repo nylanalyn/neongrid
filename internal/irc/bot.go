@@ -272,7 +272,7 @@ func freeCommand(message string, kind game.Activity) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimPrefix(fields[0], "!")) {
-	case "status", "runner", "top":
+	case "status", "runner", "top", "gear":
 		return true
 	default:
 		return false
@@ -304,6 +304,13 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		for i, p := range players {
 			client.Cmd.Message(target, fmt.Sprintf("[GRID] #%d %s — Rep %d", i+1, p.Nick, p.Level))
 		}
+	case "gear":
+		p, err := b.game.Status(identity, e.Source.Name, now)
+		if err != nil {
+			client.Cmd.Message(target, "[GRID] no runner loadout found yet.")
+			return
+		}
+		client.Cmd.Message(target, gearLine(p))
 	case "faction":
 		if len(fields) < 2 {
 			client.Cmd.Message(target, "[GRID] choose once: ghostline (safer ICE), chrome (bigger shards), or nomad (smaller ICE losses).")
@@ -316,7 +323,7 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		}
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction locked: %s", p.Faction))
 	case "help":
-		client.Cmd.Message(target, "[GRID] !status/!runner !top !faction !help — passive progression; keep chatter out of the game channel.")
+		client.Cmd.Message(target, "[GRID] !status/!runner !top !gear !faction !help — passive progression; keep chatter out of the game channel.")
 	case "pirate":
 		if !b.isAdmin(account) {
 			client.Cmd.Message(target, "[GRID] admin clearance required.")
@@ -378,6 +385,20 @@ func statusLine(p *game.Player, rules game.Rules) string {
 		faction = "unaffiliated"
 	}
 	return fmt.Sprintf("[GRID] %s | Rep %d | next %s | rating %d | faction %s | id %s", p.Nick, p.Level, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, identity)
+}
+
+func gearLine(p *game.Player) string {
+	slots := []string{game.SlotWeaponRig, game.SlotArmorPlating, game.SlotNeuralImplant, game.SlotDeck, game.SlotDrone}
+	parts := make([]string, 0, len(slots))
+	for _, slot := range slots {
+		if item, ok := p.Equipment[slot]; ok {
+			parts = append(parts, fmt.Sprintf("%s: %s", strings.ReplaceAll(slot, "_", " "), item.Name))
+		}
+	}
+	if len(parts) == 0 {
+		return "[GRID] loadout: unconfigured"
+	}
+	return "[GRID] loadout | " + strings.Join(parts, " | ")
 }
 
 func formatPenalty(seconds int64) string {
