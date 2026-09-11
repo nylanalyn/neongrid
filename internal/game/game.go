@@ -459,6 +459,12 @@ func (e *Engine) ForcePirate(now time.Time) (string, error) {
 
 func (e *Engine) Rules() Rules { return e.rules }
 
+func (e *Engine) World() WorldState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.world
+}
+
 func PenaltySeconds(level int, kind Activity, length int, rules Rules) int64 {
 	if level < 1 {
 		level = 1

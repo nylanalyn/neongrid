@@ -272,7 +272,7 @@ func freeCommand(message string, kind game.Activity) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimPrefix(fields[0], "!")) {
-	case "status", "runner", "top", "gear":
+	case "status", "runner", "top", "gear", "world":
 		return true
 	default:
 		return false
@@ -311,6 +311,8 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 			return
 		}
 		client.Cmd.Message(target, gearLine(p))
+	case "world":
+		client.Cmd.Message(target, worldLine(b.game.World(), now))
 	case "faction":
 		if len(fields) < 2 {
 			client.Cmd.Message(target, "[GRID] choose once: ghostline (safer ICE), chrome (bigger shards), or nomad (smaller ICE losses).")
@@ -323,7 +325,7 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		}
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction locked: %s", p.Faction))
 	case "help":
-		client.Cmd.Message(target, "[GRID] !status/!runner !top !gear !faction !help — passive progression; keep chatter out of the game channel.")
+		client.Cmd.Message(target, "[GRID] !status/!runner !top !gear !world !faction !help — passive progression; keep chatter out of the game channel.")
 	case "pirate":
 		if !b.isAdmin(account) {
 			client.Cmd.Message(target, "[GRID] admin clearance required.")
@@ -399,6 +401,17 @@ func gearLine(p *game.Player) string {
 		return "[GRID] loadout: unconfigured"
 	}
 	return "[GRID] loadout | " + strings.Join(parts, " | ")
+}
+
+func worldLine(world game.WorldState, now time.Time) string {
+	if world.PirateUntil.After(now) {
+		return "[GRID] pirate frequency active for " + formatPenalty(int64(world.PirateUntil.Sub(now)/time.Second)) + "; transmissions safe."
+	}
+	remaining := world.NextCityEventAt.Sub(now)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return "[GRID] pirate frequency dormant | next city event in " + formatPenalty(int64(remaining/time.Second))
 }
 
 func formatPenalty(seconds int64) string {
