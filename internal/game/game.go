@@ -67,6 +67,7 @@ type Player struct {
 type WorldState struct {
 	PirateUntil     time.Time
 	NextCityEventAt time.Time
+	RecentEvents    []string
 }
 
 type cityEvent struct {
@@ -114,13 +115,12 @@ type Repository interface {
 }
 
 type Engine struct {
-	mu     sync.Mutex
-	repo   Repository
-	rules  Rules
-	rng    *rand.Rand
-	world  WorldState
-	users  map[string]*Player
-	events []string
+	mu    sync.Mutex
+	repo  Repository
+	rules Rules
+	rng   *rand.Rand
+	world WorldState
+	users map[string]*Player
 }
 
 func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, error) {
@@ -445,7 +445,9 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			return nil, err
 		}
 	}
-	e.rememberLocked(messages...)
+	if err := e.rememberLocked(messages...); err != nil {
+		return nil, err
+	}
 	return messages, nil
 }
 
@@ -453,11 +455,10 @@ func (e *Engine) ForcePirate(now time.Time) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.world.PirateUntil = now.Add(e.rules.PirateDuration)
-	if err := e.repo.SaveWorldState(e.world); err != nil {
+	message := fmt.Sprintf("[GRID] PIRATE FREQUENCY: transmissions are safe for %s.", formatDuration(e.rules.PirateDuration))
+	if err := e.rememberLocked(message); err != nil {
 		return "", err
 	}
-	message := fmt.Sprintf("[GRID] PIRATE FREQUENCY: transmissions are safe for %s.", formatDuration(e.rules.PirateDuration))
-	e.rememberLocked(message)
 	return message, nil
 }
 
@@ -475,12 +476,12 @@ func (e *Engine) RecentEvents(limit int) []string {
 	if limit < 1 {
 		limit = 10
 	}
-	if limit > len(e.events) {
-		limit = len(e.events)
+	if limit > len(e.world.RecentEvents) {
+		limit = len(e.world.RecentEvents)
 	}
 	events := make([]string, limit)
 	for i := range events {
-		events[i] = e.events[len(e.events)-1-i]
+		events[i] = e.world.RecentEvents[len(e.world.RecentEvents)-1-i]
 	}
 	return events
 }
@@ -602,11 +603,15 @@ func validFaction(faction string) bool {
 	}
 }
 
-func (e *Engine) rememberLocked(messages ...string) {
-	e.events = append(e.events, messages...)
-	if len(e.events) > 20 {
-		e.events = e.events[len(e.events)-20:]
+func (e *Engine) rememberLocked(messages ...string) error {
+	if len(messages) == 0 {
+		return nil
 	}
+	e.world.RecentEvents = append(e.world.RecentEvents, messages...)
+	if len(e.world.RecentEvents) > 20 {
+		e.world.RecentEvents = e.world.RecentEvents[len(e.world.RecentEvents)-20:]
+	}
+	return e.repo.SaveWorldState(e.world)
 }
 
 func (e *Engine) cityEventLocked(now time.Time) (string, error) {

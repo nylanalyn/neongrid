@@ -44,3 +44,27 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 		t.Fatalf("post-migration = %+v, %v", loaded, err)
 	}
 }
+
+func TestWorldEventHistoryRoundTrip(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	want := game.WorldState{
+		PirateUntil:     time.Unix(1000, 0),
+		NextCityEventAt: time.Unix(1100, 0),
+		RecentEvents:    []string{"[GRID] DATA LEAK", "[GRID] PIRATE FREQUENCY"},
+	}
+	if err := store.SaveWorldState(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LoadWorldState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PirateUntil != want.PirateUntil || got.NextCityEventAt != want.NextCityEventAt || len(got.RecentEvents) != 2 || got.RecentEvents[0] != want.RecentEvents[0] {
+		t.Fatalf("world = %#v, want %#v", got, want)
+	}
+}

@@ -166,6 +166,12 @@ func (s *Store) LoadWorldState() (game.WorldState, error) {
 		if err := rows.Scan(&key, &value); err != nil {
 			return state, err
 		}
+		if key == "recent_events" {
+			if err := json.Unmarshal([]byte(value), &state.RecentEvents); err != nil {
+				return state, fmt.Errorf("world state %s: %w", key, err)
+			}
+			continue
+		}
 		seconds, err := parseUnix(value)
 		if err != nil {
 			return state, fmt.Errorf("world state %s: %w", key, err)
@@ -181,11 +187,16 @@ func (s *Store) LoadWorldState() (game.WorldState, error) {
 }
 
 func (s *Store) SaveWorldState(state game.WorldState) error {
-	for key, value := range map[string]int64{
-		"pirate_until":       unix(state.PirateUntil),
-		"next_city_event_at": unix(state.NextCityEventAt),
+	recentEvents, err := json.Marshal(state.RecentEvents)
+	if err != nil {
+		return err
+	}
+	for key, value := range map[string]string{
+		"pirate_until":       fmt.Sprint(unix(state.PirateUntil)),
+		"next_city_event_at": fmt.Sprint(unix(state.NextCityEventAt)),
+		"recent_events":      string(recentEvents),
 	} {
-		if _, err := s.db.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, fmt.Sprint(value)); err != nil {
+		if _, err := s.db.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 			return err
 		}
 	}
