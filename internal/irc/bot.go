@@ -64,6 +64,7 @@ func (b *Bot) Run(ctx context.Context) error {
 				if b.cfg.TLS && !legacyTLS {
 					// ponytail: one compatibility retry for old TLS endpoints; make the policy configurable if more legacy networks appear.
 					legacyTLS = true
+					b.log.Printf("retrying with legacy TLS 1.2 RSA/CBC compatibility")
 				}
 			}
 		}
