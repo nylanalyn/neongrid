@@ -69,6 +69,20 @@ type WorldState struct {
 	NextCityEventAt time.Time
 }
 
+type cityEvent struct {
+	text           string
+	progressChange int64
+}
+
+var cityEvents = []cityEvent{
+	{text: "BLACKOUT rolls across the lower stacks.", progressChange: -60},
+	{text: "CORPORATE SWEEP detected. Keep your signatures cold.", progressChange: -90},
+	{text: "DATA LEAK: fresh intel is spilling onto the Grid.", progressChange: 120},
+	{text: "GANG WAR erupts beneath the maglev lines.", progressChange: -120},
+	{text: "BOUNTY contract posted; every faction is watching.", progressChange: 90},
+	{text: "MEGACORP RUN authorized. The payout is probably a trap.", progressChange: 180},
+}
+
 type Rules struct {
 	GameChannel               string
 	BaseLevelSeconds          int64
@@ -394,6 +408,17 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var messages []string
+	if !e.world.NextCityEventAt.IsZero() && !now.Before(e.world.NextCityEventAt) {
+		message, err := e.cityEventLocked(now)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+		e.world.NextCityEventAt = now.Add(e.rules.CityEventInterval)
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return nil, err
+		}
+	}
 	for key, p := range e.users {
 		if p.Guest && !p.Connected && !p.LastSeenAt.IsZero() && now.Sub(p.LastSeenAt) > e.rules.GuestRetention {
 			if err := e.repo.Delete(key); err != nil {
@@ -416,13 +441,6 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. %s upgraded.", p.Nick, level, equipmentSlots[(level-2)%len(equipmentSlots)]))
 		}
 		if err := e.repo.Save(p); err != nil {
-			return nil, err
-		}
-	}
-	if !e.world.NextCityEventAt.IsZero() && !now.Before(e.world.NextCityEventAt) {
-		messages = append(messages, e.cityEventLocked(now))
-		e.world.NextCityEventAt = now.Add(e.rules.CityEventInterval)
-		if err := e.repo.SaveWorldState(e.world); err != nil {
 			return nil, err
 		}
 	}
@@ -558,20 +576,31 @@ func validFaction(faction string) bool {
 	}
 }
 
-func (e *Engine) cityEventLocked(now time.Time) string {
+func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 	if e.rng.Intn(10) == 0 {
 		e.world.PirateUntil = now.Add(e.rules.PirateDuration)
-		return fmt.Sprintf("[GRID] PIRATE FREQUENCY: for %s, channel transmissions are safe.", formatDuration(e.rules.PirateDuration))
+		return fmt.Sprintf("[GRID] PIRATE FREQUENCY: for %s, channel transmissions are safe.", formatDuration(e.rules.PirateDuration)), nil
 	}
-	events := []string{
-		"BLACKOUT rolls across the lower stacks; runner profiles go dark.",
-		"CORPORATE SWEEP detected. Keep your signatures cold.",
-		"DATA LEAK: fresh intel is spilling onto the Grid.",
-		"GANG WAR erupts beneath the maglev lines.",
-		"BOUNTY contract posted; every faction is watching.",
-		"MEGACORP RUN authorized. The payout is probably a trap.",
+	event := cityEvents[e.rng.Intn(len(cityEvents))]
+	for _, p := range e.users {
+		if !p.Connected {
+			continue
+		}
+		p.ProgressSeconds += event.progressChange
+		if err := e.repo.Save(p); err != nil {
+			return "", err
+		}
 	}
-	return "[GRID] CITY EVENT: " + events[e.rng.Intn(len(events))]
+	return fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", event.text, formatProgressChange(event.progressChange)), nil
+}
+
+func formatProgressChange(seconds int64) string {
+	sign := "+"
+	if seconds < 0 {
+		sign = "-"
+		seconds = -seconds
+	}
+	return sign + formatDuration(time.Duration(seconds)*time.Second) + " progress"
 }
 
 func (p *Player) EquipmentRating() int {

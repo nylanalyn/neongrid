@@ -198,3 +198,14 @@ func TestFactionChoiceIsPermanent(t *testing.T) {
 		t.Fatal("unknown faction succeeded")
 	}
 }
+
+func TestCityEventProgressChangesAreMeaningful(t *testing.T) {
+	for _, event := range cityEvents {
+		if event.progressChange == 0 {
+			t.Fatalf("city event %q has no progress effect", event.text)
+		}
+	}
+	if got := formatProgressChange(-90); got != "-1m30s progress" {
+		t.Fatalf("formatProgressChange(-90) = %q", got)
+	}
+}
