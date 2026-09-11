@@ -35,7 +35,7 @@ For older IRC endpoints that abort modern TLS negotiation, the bot retries once 
 - `!help` — show the compact command list
 - `!pirate` — admin-only manual pirate-frequency window
 
-Commands typed in the game channel are still transmissions and receive the normal penalty. Use another channel or a private message for safe administration.
+Normal chat in the game channel is still a transmission and receives the normal penalty. `!status`, `!runner`, and `!top` are safe read-only commands; use another channel or a private message for other administration.
 
 ## Configuration
 

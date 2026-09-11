@@ -214,9 +214,11 @@ func (b *Bot) handleMessage(client *girc.Client, e girc.Event) {
 	if account != "" {
 		identity = game.AccountKey(account)
 	}
-	penalty, _, err := b.game.Activity(identity, e.Source.Name, e.Params[0], kind, utf8.RuneCountInString(message), eventTime(e))
-	if err == nil && penalty > 0 {
-		client.Cmd.Message(e.Params[0], fmt.Sprintf("[GRID] %s broadcast into the Grid. +%s to next Rep.", e.Source.Name, formatPenalty(penalty)))
+	if !freeCommand(message, kind) {
+		penalty, _, err := b.game.Activity(identity, e.Source.Name, e.Params[0], kind, utf8.RuneCountInString(message), eventTime(e))
+		if err == nil && penalty > 0 {
+			client.Cmd.Message(e.Params[0], fmt.Sprintf("[GRID] %s broadcast into the Grid. +%s to next Rep.", e.Source.Name, formatPenalty(penalty)))
+		}
 	}
 	b.handleCommand(client, &e, identity, account)
 }
@@ -248,12 +250,32 @@ func (b *Bot) handleKick(_ *girc.Client, e girc.Event) {
 	}
 }
 
-func (b *Bot) handleNick(_ *girc.Client, e girc.Event) {
+func (b *Bot) handleNick(client *girc.Client, e girc.Event) {
 	if e.Source == nil || len(e.Params) == 0 {
 		return
 	}
-	if _, err := b.game.Rename(e.Source.Name, e.Params[0], eventTime(e)); err != nil && err != game.ErrRunnerNotFound {
+	penalty, err := b.game.Rename(e.Source.Name, e.Params[0], eventTime(e))
+	if err != nil && err != game.ErrRunnerNotFound {
 		b.log.Printf("nick %s: %v", e.Source.Name, err)
+	}
+	if err == nil && penalty > 0 {
+		client.Cmd.Message(b.cfg.Channel, fmt.Sprintf("[GRID] %s altered their network signature. +%s to next Rep.", e.Source.Name, formatPenalty(penalty)))
+	}
+}
+
+func freeCommand(message string, kind game.Activity) bool {
+	if kind != game.ActivityChat {
+		return false
+	}
+	fields := strings.Fields(message)
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "!") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimPrefix(fields[0], "!")) {
+	case "status", "runner", "top":
+		return true
+	default:
+		return false
 	}
 }
 

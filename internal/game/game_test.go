@@ -155,3 +155,25 @@ func TestPenaltyScalesWithLevel(t *testing.T) {
 		t.Fatal("action length was ignored")
 	}
 }
+
+func TestNickChangePenalizesAndUpdatesNick(t *testing.T) {
+	now := time.Unix(4000, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	penalty, err := e.Rename("runner", "runner2", now)
+	if err != nil || penalty != testRules().NickPenaltySeconds {
+		t.Fatalf("rename result: penalty=%d err=%v", penalty, err)
+	}
+	p, err := e.Status(AccountKey("acct"), "runner2", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Nick != "runner2" || p.ProgressSeconds != -penalty {
+		t.Fatalf("rename state: %+v", p)
+	}
+}
