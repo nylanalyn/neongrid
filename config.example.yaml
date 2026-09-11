@@ -1,0 +1,41 @@
+server: irc.libera.chat
+port: 6697
+tls: true
+nick: neongrid
+user: neongrid
+name: NeonGrid runner daemon
+channel: '#neongrid'
+database: data/neongrid.db
+admin_accounts:
+  - your_nickserv_account
+
+nickserv:
+  name: NickServ
+  # Prefer NEONGRID_NICKSERV_PASSWORD in the environment.
+  password: ''
+  identify_command: IDENTIFY
+
+progression:
+  base_minutes: 30
+  level_step_minutes: 2
+
+penalty:
+  speech_base_seconds: 30
+  speech_per_level_seconds: 5
+  speech_per_character_seconds: 1
+  action_base_seconds: 45
+  action_per_level_seconds: 7
+  action_per_character_seconds: 1
+  nick_seconds: 90
+  part_seconds: 180
+  quit_seconds: 240
+  kick_seconds: 360
+
+events:
+  tick_seconds: 30
+  encounter_minutes: 60
+  city_event_minutes: 120
+  pirate_minutes: 5
+
+guest_retention_days: 14
+reconnect_seconds: 10
