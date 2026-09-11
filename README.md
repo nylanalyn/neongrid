@@ -26,6 +26,8 @@ NEONGRID_NICKSERV_PASSWORD='secret' ./neongrid -config config.yaml
 
 The bot requests IRCv3 account identity when available (`account-tag`, `extended-join`, and `account-notify`). It falls back to `WHOIS` account responses and uses temporary `guest:<nick>` identities until a NickServ account is observed. Guest runners are retained for the configured number of days and migrate to the account key without losing progress.
 
+For older IRC endpoints that abort modern TLS negotiation, the bot retries once with the legacy TLS 1.2 RSA/CBC suite required by those servers. Upgrading the server’s TLS configuration is preferable.
+
 ## Commands
 
 - `!status` / `!runner` — show Rep, next level time, gear rating, and identity

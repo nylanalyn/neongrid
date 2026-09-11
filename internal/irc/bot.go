@@ -2,6 +2,7 @@ package irc
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"strings"
@@ -31,11 +32,12 @@ func New(cfg config.Config, engine *game.Engine, logger *log.Logger) *Bot {
 }
 
 func (b *Bot) Run(ctx context.Context) error {
+	legacyTLS := false
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		client := b.newClient()
+		client := b.newClient(legacyTLS)
 		b.mu.Lock()
 		b.client = client
 		b.mu.Unlock()
@@ -59,6 +61,10 @@ func (b *Bot) Run(ctx context.Context) error {
 			}
 			if err != nil {
 				b.log.Printf("IRC disconnected: %v", err)
+				if b.cfg.TLS && !legacyTLS {
+					// ponytail: one compatibility retry for old TLS endpoints; make the policy configurable if more legacy networks appear.
+					legacyTLS = true
+				}
 			}
 		}
 
@@ -83,8 +89,8 @@ func (b *Bot) Announce(message string) {
 	}
 }
 
-func (b *Bot) newClient() *girc.Client {
-	client := girc.New(girc.Config{
+func (b *Bot) newClient(legacyTLS bool) *girc.Client {
+	ircConfig := girc.Config{
 		Server: b.cfg.Server, Port: b.cfg.Port, SSL: b.cfg.TLS,
 		Nick: b.cfg.Nick, User: b.cfg.User, Name: b.cfg.Name,
 		RecoverFunc: girc.DefaultRecoverHandler,
@@ -92,7 +98,16 @@ func (b *Bot) newClient() *girc.Client {
 			"account-notify": nil, "account-tag": nil, "extended-join": nil,
 			"message-tags": nil, "server-time": nil,
 		},
-	})
+	}
+	if b.cfg.TLS {
+		ircConfig.TLSConfig = &tls.Config{ServerName: b.cfg.Server, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12}
+		if legacyTLS {
+			ircConfig.TLSConfig.CipherSuites = []uint16{
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			}
+		}
+	}
+	client := girc.New(ircConfig)
 	b.register(client)
 	return client
 }
@@ -140,7 +155,7 @@ func (b *Bot) handleNames(client *girc.Client, e girc.Event) {
 		return
 	}
 	for _, name := range strings.Fields(e.Params[3]) {
-		nick := strings.TrimLeft(name, "~&@%+")
+		nick := namesNick(name)
 		if nick == "" || strings.EqualFold(nick, client.GetNick()) {
 			continue
 		}
@@ -155,6 +170,14 @@ func (b *Bot) handleNames(client *girc.Client, e girc.Event) {
 			client.Cmd.Whois(nick)
 		}
 	}
+}
+
+func namesNick(value string) string {
+	value = strings.TrimLeft(value, "~&@%+")
+	if separator := strings.IndexByte(value, '!'); separator >= 0 {
+		value = value[:separator]
+	}
+	return value
 }
 
 func (b *Bot) handleAccount(_ *girc.Client, e girc.Event) {
