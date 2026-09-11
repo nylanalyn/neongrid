@@ -30,6 +30,12 @@ const (
 	SlotDrone         = "drone"
 )
 
+const (
+	FactionGhostline = "ghostline"
+	FactionChrome    = "chrome"
+	FactionNomad     = "nomad"
+)
+
 var equipmentSlots = []string{
 	SlotWeaponRig,
 	SlotArmorPlating,
@@ -240,6 +246,29 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 		return nil, err
 	}
 	return clonePlayer(guest), nil
+}
+
+func (e *Engine) SetFaction(identity, nick, faction string, now time.Time) (*Player, error) {
+	faction = strings.ToLower(strings.TrimSpace(faction))
+	if !validFaction(faction) {
+		return nil, errors.New("unknown faction")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	p := e.findLocked(identity, nick)
+	if p == nil {
+		return nil, ErrRunnerNotFound
+	}
+	if p.Faction != "" {
+		return nil, errors.New("faction is already locked")
+	}
+	e.advanceLocked(p, now)
+	p.Faction = faction
+	p.LastSeenAt = now
+	if err := e.repo.Save(p); err != nil {
+		return nil, err
+	}
+	return clonePlayer(p), nil
 }
 
 func (e *Engine) Activity(identity, nick, channel string, kind Activity, length int, now time.Time) (int64, bool, error) {
@@ -500,13 +529,33 @@ func (e *Engine) advanceLocked(p *Player, now time.Time) {
 
 func (e *Engine) encounterLocked(p *Player) string {
 	rating := p.Level + p.EquipmentRating()
+	if p.Faction == FactionGhostline {
+		rating += 2
+	}
 	threat := 1 + e.rng.Intn(max(2, rating+5))
 	if rating >= threat {
-		p.ProgressSeconds += max64(10, e.rules.LevelDuration(p.Level)/20)
+		gain := max64(10, e.rules.LevelDuration(p.Level)/20)
+		if p.Faction == FactionChrome {
+			gain = gain * 3 / 2
+		}
+		p.ProgressSeconds += gain
 		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.", p.Nick)
 	}
-	p.ProgressSeconds -= max64(5, e.rules.LevelDuration(p.Level)/30)
+	loss := max64(5, e.rules.LevelDuration(p.Level)/30)
+	if p.Faction == FactionNomad {
+		loss = max64(3, loss/2)
+	}
+	p.ProgressSeconds -= loss
 	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick)
+}
+
+func validFaction(faction string) bool {
+	switch faction {
+	case FactionGhostline, FactionChrome, FactionNomad:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) cityEventLocked(now time.Time) string {

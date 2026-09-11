@@ -304,8 +304,19 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		for i, p := range players {
 			client.Cmd.Message(target, fmt.Sprintf("[GRID] #%d %s — Rep %d", i+1, p.Nick, p.Level))
 		}
+	case "faction":
+		if len(fields) < 2 {
+			client.Cmd.Message(target, "[GRID] choose once: ghostline (safer ICE), chrome (bigger shards), or nomad (smaller ICE losses).")
+			return
+		}
+		p, err := b.game.SetFaction(identity, e.Source.Name, fields[1], now)
+		if err != nil {
+			client.Cmd.Message(target, "[GRID] faction unavailable: "+err.Error())
+			return
+		}
+		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction locked: %s", p.Faction))
 	case "help":
-		client.Cmd.Message(target, "[GRID] !status/!runner !top !help — passive progression; keep chatter out of the game channel.")
+		client.Cmd.Message(target, "[GRID] !status/!runner !top !faction !help — passive progression; keep chatter out of the game channel.")
 	case "pirate":
 		if !b.isAdmin(account) {
 			client.Cmd.Message(target, "[GRID] admin clearance required.")
@@ -362,7 +373,11 @@ func statusLine(p *game.Player, rules game.Rules) string {
 	if !p.Guest {
 		identity = p.Account
 	}
-	return fmt.Sprintf("[GRID] %s | Rep %d | next %s | rating %d | id %s", p.Nick, p.Level, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), identity)
+	faction := p.Faction
+	if faction == "" {
+		faction = "unaffiliated"
+	}
+	return fmt.Sprintf("[GRID] %s | Rep %d | next %s | rating %d | faction %s | id %s", p.Nick, p.Level, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, identity)
 }
 
 func formatPenalty(seconds int64) string {

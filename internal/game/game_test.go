@@ -177,3 +177,24 @@ func TestNickChangePenalizesAndUpdatesNick(t *testing.T) {
 		t.Fatalf("rename state: %+v", p)
 	}
 }
+
+func TestFactionChoiceIsPermanent(t *testing.T) {
+	now := time.Unix(5000, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.SetFaction(AccountKey("acct"), "runner", FactionGhostline, now)
+	if err != nil || p.Faction != FactionGhostline {
+		t.Fatalf("faction choice: %+v %v", p, err)
+	}
+	if _, err = e.SetFaction(AccountKey("acct"), "runner", FactionNomad, now); err == nil {
+		t.Fatal("second faction choice succeeded")
+	}
+	if _, err = e.SetFaction(AccountKey("acct"), "runner", "unknown", now); err == nil {
+		t.Fatal("unknown faction succeeded")
+	}
+}
