@@ -1,9 +1,15 @@
 package irc
 
 import (
+	"crypto/tls"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
+	"github.com/lrstanley/girc"
+
+	"neongrid/internal/config"
 	"neongrid/internal/game"
 )
 
@@ -58,5 +64,55 @@ func TestWorldLineShowsPirateWindowOrNextEvent(t *testing.T) {
 	}
 	if got := worldLine(game.WorldState{NextCityEventAt: now.Add(2 * time.Minute)}, now); got != "[GRID] pirate frequency dormant | next city event in 2m0s" {
 		t.Fatalf("dormant worldLine() = %q", got)
+	}
+}
+
+func TestTLSModes(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Server = "irc.example.test"
+	b := New(cfg, nil, nil)
+
+	modern := b.newClient(false, make(chan struct{}, 1))
+	if got := modern.Config.TLSConfig.MaxVersion; got != 0 {
+		t.Fatalf("modern TLS max version = %d, want default", got)
+	}
+	if len(modern.Config.TLSConfig.CipherSuites) != 0 {
+		t.Fatal("modern TLS unexpectedly forced a cipher suite")
+	}
+
+	legacy := b.newClient(true, make(chan struct{}, 1))
+	if got := legacy.Config.TLSConfig.MaxVersion; got != tls.VersionTLS12 {
+		t.Fatalf("legacy TLS max version = %d, want TLS 1.2", got)
+	}
+	if len(legacy.Config.TLSConfig.CipherSuites) != 1 || legacy.Config.TLSConfig.CipherSuites[0] != tls.TLS_RSA_WITH_AES_256_CBC_SHA {
+		t.Fatalf("legacy TLS ciphers = %#v", legacy.Config.TLSConfig.CipherSuites)
+	}
+
+	cfg.TLS12Only = true
+	forced := New(cfg, nil, nil).newClient(false, make(chan struct{}, 1))
+	if forced.Config.TLSConfig.MaxVersion != tls.VersionTLS12 {
+		t.Fatal("tls12_only did not force TLS 1.2")
+	}
+	if !legacyTLSFailure(io.EOF) || !legacyTLSFailure(tls.AlertError(40)) || legacyTLSFailure(errors.New("connection reset by peer")) {
+		t.Fatal("legacy TLS failure detection is too broad or too narrow")
+	}
+}
+
+func TestAccountHandlersIgnoreBotIdentity(t *testing.T) {
+	cfg := config.Defaults()
+	b := New(cfg, nil, nil)
+	client := b.newClient(false, make(chan struct{}, 1))
+	source := &girc.Source{Name: client.GetNick()}
+	b.handleAccount(client, girc.Event{Source: source, Params: []string{"bot-account"}})
+	b.handleWhoisAccount(client, girc.Event{Params: []string{client.GetNick(), client.GetNick(), "bot-account"}})
+}
+
+func TestIsAdminRejectsBlankAccount(t *testing.T) {
+	b := New(config.Config{AdminAccounts: []string{"", " gridadmin "}}, nil, nil)
+	if b.isAdmin("") {
+		t.Fatal("blank account was accepted as admin")
+	}
+	if !b.isAdmin("gridadmin") {
+		t.Fatal("configured admin was rejected")
 	}
 }

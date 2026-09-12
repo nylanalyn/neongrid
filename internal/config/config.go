@@ -16,6 +16,7 @@ type Config struct {
 	Server             string            `yaml:"server"`
 	Port               int               `yaml:"port"`
 	TLS                bool              `yaml:"tls"`
+	TLS12Only          bool              `yaml:"tls12_only"`
 	Nick               string            `yaml:"nick"`
 	User               string            `yaml:"user"`
 	Name               string            `yaml:"name"`
@@ -185,6 +186,9 @@ func applyEnv(c *Config) error {
 		return err
 	}
 	if err := boolEnv("NEONGRID_TLS", &c.TLS); err != nil {
+		return err
+	}
+	if err := boolEnv("NEONGRID_TLS12_ONLY", &c.TLS12Only); err != nil {
 		return err
 	}
 	if err := intEnv("NEONGRID_GUEST_RETENTION_DAYS", &c.GuestRetentionDays); err != nil {

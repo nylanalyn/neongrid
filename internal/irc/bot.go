@@ -3,7 +3,9 @@ package irc
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"sync"
@@ -32,41 +34,58 @@ func New(cfg config.Config, engine *game.Engine, logger *log.Logger) *Bot {
 }
 
 func (b *Bot) Run(ctx context.Context) error {
-	legacyTLS := false
+	legacyTLS := b.cfg.TLS12Only
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		client := b.newClient(legacyTLS)
+		connected := make(chan struct{}, 1)
+		client := b.newClient(legacyTLS, connected)
 		b.mu.Lock()
 		b.client = client
 		b.mu.Unlock()
 
 		done := make(chan error, 1)
 		go func() { done <- client.Connect() }()
-		select {
-		case <-ctx.Done():
-			client.Close()
-			<-done
-			b.clearClient(client)
-			_ = b.game.DisconnectAll(time.Now())
-			return nil
-		case err := <-done:
-			b.clearClient(client)
-			if disconnectErr := b.game.DisconnectAll(time.Now()); disconnectErr != nil {
-				return disconnectErr
-			}
-			if ctx.Err() != nil {
+		established := false
+		var err error
+		waiting := true
+		for waiting {
+			select {
+			case <-ctx.Done():
+				client.Close()
+				<-done
+				b.clearClient(client)
+				_ = b.game.DisconnectAll(time.Now())
 				return nil
-			}
-			if err != nil {
-				b.log.Printf("IRC disconnected: %v", err)
-				if b.cfg.TLS && !legacyTLS {
-					// ponytail: one compatibility retry for old TLS endpoints; make the policy configurable if more legacy networks appear.
-					legacyTLS = true
-					b.log.Printf("retrying with legacy TLS 1.2 RSA/CBC compatibility")
+			case <-connected:
+				established = true
+			case err = <-done:
+				select {
+				case <-connected:
+					established = true
+				default:
 				}
+				waiting = false
 			}
+		}
+		b.clearClient(client)
+		if disconnectErr := b.game.DisconnectAll(time.Now()); disconnectErr != nil {
+			return disconnectErr
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err != nil {
+			b.log.Printf("IRC disconnected: %v", err)
+			if b.cfg.TLS && !established && !legacyTLS && legacyTLSFailure(err) {
+				// ponytail: girc reports this endpoint's cipher failure as EOF; use a typed handshake signal if the library exposes one later.
+				legacyTLS = true
+				b.log.Printf("retrying with legacy TLS 1.2 RSA/CBC compatibility")
+			}
+		}
+		if established && !b.cfg.TLS12Only {
+			legacyTLS = false
 		}
 
 		timer := time.NewTimer(time.Duration(b.cfg.ReconnectSeconds) * time.Second)
@@ -90,7 +109,7 @@ func (b *Bot) Announce(message string) {
 	}
 }
 
-func (b *Bot) newClient(legacyTLS bool) *girc.Client {
+func (b *Bot) newClient(legacyTLS bool, connected chan<- struct{}) *girc.Client {
 	ircConfig := girc.Config{
 		Server: b.cfg.Server, Port: b.cfg.Port, SSL: b.cfg.TLS,
 		Nick: b.cfg.Nick, User: b.cfg.User, Name: b.cfg.Name,
@@ -101,19 +120,37 @@ func (b *Bot) newClient(legacyTLS bool) *girc.Client {
 		},
 	}
 	if b.cfg.TLS {
-		ircConfig.TLSConfig = &tls.Config{ServerName: b.cfg.Server, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12}
-		if legacyTLS {
-			ircConfig.TLSConfig.CipherSuites = []uint16{
+		tlsConfig := &tls.Config{ServerName: b.cfg.Server, MinVersion: tls.VersionTLS12}
+		if legacyTLS || b.cfg.TLS12Only {
+			tlsConfig.MaxVersion = tls.VersionTLS12
+			tlsConfig.CipherSuites = []uint16{
 				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
 			}
 		}
+		ircConfig.TLSConfig = tlsConfig
 	}
 	client := girc.New(ircConfig)
-	b.register(client)
+	b.register(client, connected)
 	return client
 }
 
-func (b *Bot) register(client *girc.Client) {
+func legacyTLSFailure(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var alert tls.AlertError
+	return errors.As(err, &alert)
+}
+
+func (b *Bot) register(client *girc.Client, connected chan<- struct{}) {
+	client.Handlers.Add(girc.CONNECTED, func(_ *girc.Client, _ girc.Event) {
+		if connected != nil {
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+		}
+	})
 	client.Handlers.Add(girc.RPL_WELCOME, func(c *girc.Client, _ girc.Event) {
 		if b.cfg.NickServ.Password != "" {
 			command := strings.TrimSpace(b.cfg.NickServ.IdentifyCommand + " " + b.cfg.NickServ.Password)
@@ -181,8 +218,8 @@ func namesNick(value string) string {
 	return value
 }
 
-func (b *Bot) handleAccount(_ *girc.Client, e girc.Event) {
-	if e.Source == nil || len(e.Params) == 0 || e.Params[0] == "*" {
+func (b *Bot) handleAccount(client *girc.Client, e girc.Event) {
+	if e.Source == nil || e.Source.ID() == client.GetID() || len(e.Params) == 0 || e.Params[0] == "*" {
 		return
 	}
 	if _, err := b.game.Bind(e.Source.Name, e.Params[0], eventTime(e)); err != nil {
@@ -190,8 +227,8 @@ func (b *Bot) handleAccount(_ *girc.Client, e girc.Event) {
 	}
 }
 
-func (b *Bot) handleWhoisAccount(_ *girc.Client, e girc.Event) {
-	if len(e.Params) < 3 {
+func (b *Bot) handleWhoisAccount(client *girc.Client, e girc.Event) {
+	if len(e.Params) < 3 || strings.EqualFold(e.Params[1], client.GetNick()) {
 		return
 	}
 	if _, err := b.game.Bind(e.Params[1], e.Params[2], eventTime(e)); err != nil {
@@ -365,8 +402,13 @@ func (b *Bot) account(client *girc.Client, e *girc.Event) string {
 }
 
 func (b *Bot) isAdmin(account string) bool {
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return false
+	}
 	for _, admin := range b.cfg.AdminAccounts {
-		if strings.EqualFold(strings.TrimSpace(admin), account) {
+		admin = strings.TrimSpace(admin)
+		if admin != "" && strings.EqualFold(admin, account) {
 			return true
 		}
 	}

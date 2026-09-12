@@ -199,6 +199,7 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 	p := e.users[identity]
 	if !guest {
 		if guestPlayer := e.users[GuestKey(nick)]; guestPlayer != nil {
+			e.advanceLocked(guestPlayer, now)
 			migrated, err := e.repo.MigrateGuest(guestPlayer.Identity, identity, account, nick)
 			if err != nil {
 				return nil, err
@@ -212,6 +213,8 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 		p = newPlayer(identity, nick, account, now)
 		p.NextEncounterAt = now.Add(e.rules.EncounterInterval)
 		e.users[identity] = p
+	} else if p.Connected {
+		e.advanceLocked(p, now)
 	}
 	p.Nick = nick
 	p.Account = account
@@ -238,6 +241,7 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 	}
 	identity := AccountKey(account)
 	if guest != nil && guest.Guest {
+		e.advanceLocked(guest, now)
 		migrated, err := e.repo.MigrateGuest(guest.Identity, identity, account, nick)
 		if err != nil {
 			return nil, err
@@ -249,6 +253,7 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 	if guest == nil {
 		return e.joinLocked(identity, nick, account, now)
 	}
+	e.advanceLocked(guest, now)
 	guest.Identity = identity
 	guest.Account = account
 	guest.Guest = false
@@ -355,13 +360,19 @@ func (e *Engine) Rename(oldNick, newNick string, now time.Time) (int64, error) {
 	if p == nil || !p.Connected {
 		return 0, ErrRunnerNotFound
 	}
+	oldKey := p.Identity
+	newKey := GuestKey(newNick)
+	if p.Guest && newKey != oldKey {
+		if existing := e.users[newKey]; existing != nil && existing != p {
+			return 0, errors.New("nickname is already claimed by another guest runner")
+		}
+	}
 	e.advanceLocked(p, now)
 	penalty := PenaltySeconds(p.Level, ActivityNick, 0, e.rules)
 	p.ProgressSeconds -= penalty
 	p.Nick = newNick
 	if p.Guest {
-		oldKey := p.Identity
-		p.Identity = GuestKey(newNick)
+		p.Identity = newKey
 		delete(e.users, oldKey)
 		if err := e.repo.Delete(oldKey); err != nil {
 			return 0, err

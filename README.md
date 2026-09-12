@@ -28,6 +28,8 @@ The bot requests IRCv3 account identity when available (`account-tag`, `extended
 
 For older IRC endpoints that abort modern TLS negotiation, the bot retries once with the legacy TLS 1.2 RSA/CBC suite required by those servers. Upgrading the server’s TLS configuration is preferable.
 
+If the endpoint is known to require that legacy mode, set `tls12_only: true` (or `NEONGRID_TLS12_ONLY=true`) to use it directly and avoid the modern-TLS attempt.
+
 ## Commands
 
 - `!status` / `!runner` — show Rep, next level time, gear rating, and identity

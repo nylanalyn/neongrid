@@ -38,6 +38,15 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 
 - Add an explicit faction respec/reset path, likely admin-controlled or tied to a future season. Faction choice remains permanent for now.
 
+## Priority hardening before districts
+
+1. Keep modern TLS as the default; only use legacy TLS 1.2 RSA/CBC compatibility when configured or when a pre-registration handshake fails.
+2. Reject guest nick changes that would overwrite another guest runner.
+3. Preserve accrued progress when duplicate account/identity events bind an already-connected runner.
+4. Ignore the bot’s own account and WHOIS-account events.
+5. Reject blank admin identities and make world-state writes transactional.
+6. Replace loose timestamp parsing and add versioned migrations before districts introduce new persisted fields.
+
 ## Post-MVP roadmap
 
 1. Add named districts with automatic runner movement, then make event and encounter effects district-aware.

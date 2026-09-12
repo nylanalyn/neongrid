@@ -1,6 +1,8 @@
 server: irc.libera.chat
 port: 6697
 tls: true
+# Set true for legacy servers requiring TLS 1.2 RSA/CBC compatibility.
+tls12_only: false
 nick: neongrid
 user: neongrid
 name: NeonGrid runner daemon

@@ -178,6 +178,56 @@ func TestNickChangePenalizesAndUpdatesNick(t *testing.T) {
 	}
 }
 
+func TestGuestRenameRejectsOccupiedNick(t *testing.T) {
+	now := time.Unix(4500, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "alpha", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "beta", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Disconnect("beta", ActivityPart, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Rename("alpha", "beta", now); err == nil {
+		t.Fatal("guest rename overwrote an offline guest")
+	}
+	if _, err = e.Status("", "alpha", now); err != nil {
+		t.Fatal("source guest was lost after rejected rename")
+	}
+	if p, err := e.Status("", "beta", now); err != nil || p.Nick != "beta" {
+		t.Fatalf("target guest was lost: %+v %v", p, err)
+	}
+}
+
+func TestDuplicateBindAdvancesConnectedRunner(t *testing.T) {
+	now := time.Unix(4750, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Bind("runner", "acct", now.Add(20*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Bind("runner", "acct", now.Add(40*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.Status(AccountKey("acct"), "runner", now.Add(40*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ProgressSeconds != 40 {
+		t.Fatalf("duplicate bind progress = %d, want 40", p.ProgressSeconds)
+	}
+}
+
 func TestFactionChoiceIsPermanent(t *testing.T) {
 	now := time.Unix(5000, 0)
 	e, err := New(newMemoryRepo(), testRules(), nil, now)

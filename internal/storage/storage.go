@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -191,16 +192,21 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for key, value := range map[string]string{
 		"pirate_until":       fmt.Sprint(unix(state.PirateUntil)),
 		"next_city_event_at": fmt.Sprint(unix(state.NextCityEventAt)),
 		"recent_events":      string(recentEvents),
 	} {
-		if _, err := s.db.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
+		if _, err := tx.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 type scanner interface{ Scan(...any) error }
@@ -283,7 +289,5 @@ func fromUnix(value int64) time.Time {
 	return time.Unix(value, 0)
 }
 func parseUnix(value string) (int64, error) {
-	var n int64
-	_, err := fmt.Sscan(value, &n)
-	return n, err
+	return strconv.ParseInt(value, 10, 64)
 }
