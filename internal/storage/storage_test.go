@@ -21,6 +21,7 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 		Identity: game.GuestKey("runner"), Nick: "runner", Guest: true, Level: 3,
 		ProgressSeconds: 12, LastProgressAt: now, LastSeenAt: now, Connected: true,
 		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour),
+		Heat: 42, LastHeatAt: now,
 		Equipment: map[string]game.Item{game.SlotWeaponRig: {Name: "Mono-edge Mk 1", Rating: 1, Unique: true}},
 	}
 	if err := store.Save(guest); err != nil {
@@ -38,6 +39,9 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	}
 	if loaded[0].District != game.DistrictFloodline || !loaded[0].NextDistrictAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("district did not round-trip: %+v", loaded[0])
+	}
+	if loaded[0].Heat != 42 || !loaded[0].LastHeatAt.Equal(now) {
+		t.Fatalf("heat did not round-trip: %+v", loaded[0])
 	}
 
 	bound, err := store.MigrateGuest(game.GuestKey("runner"), game.AccountKey("nylan"), "nylan", "runner")
@@ -125,6 +129,13 @@ INSERT INTO players(identity, nick) VALUES('acct:test', 'runner');`)
 	}
 	if district != game.DistrictNeonMarket {
 		t.Fatalf("migrated district = %q", district)
+	}
+	var heat int
+	if err := store.db.QueryRow("SELECT heat FROM players WHERE identity = ?", "acct:test").Scan(&heat); err != nil {
+		t.Fatal(err)
+	}
+	if heat != 0 {
+		t.Fatalf("migrated heat = %d, want 0", heat)
 	}
 }
 

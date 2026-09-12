@@ -393,3 +393,50 @@ func TestRareLootAwardsUniqueArtifact(t *testing.T) {
 		t.Fatalf("rare item was not equipped: %+v", p.Equipment)
 	}
 }
+
+func TestHeatRisesAndDecaysWhileConnected(t *testing.T) {
+	now := time.Unix(11000, 0)
+	rules := testRules()
+	rules.HeatDecayInterval = 10 * time.Minute
+	rules.EncounterInterval = 24 * time.Hour
+	rules.CityEventInterval = 24 * time.Hour
+	e, err := New(newMemoryRepo(), rules, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Rename("runner", "runner2", now); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.Status(AccountKey("acct"), "runner2", now)
+	if err != nil || p.Heat != 4 {
+		t.Fatalf("nick-change heat = %d, %v", p.Heat, err)
+	}
+	p, err = e.Status(AccountKey("acct"), "runner2", now.Add(21*time.Minute))
+	if err != nil || p.Heat != 2 {
+		t.Fatalf("decayed heat = %d, %v", p.Heat, err)
+	}
+}
+
+func TestKickRaisesHeatAndHeatShapesLootChance(t *testing.T) {
+	now := time.Unix(12000, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Disconnect("runner", ActivityKick, now); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.Status(AccountKey("acct"), "runner", now)
+	if err != nil || p.Heat != 15 {
+		t.Fatalf("kick heat = %d, %v", p.Heat, err)
+	}
+	if rareLootChance(&Player{Heat: MaxHeat}) <= rareLootChance(&Player{}) {
+		t.Fatal("high heat did not improve rare-loot odds")
+	}
+}

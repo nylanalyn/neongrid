@@ -439,7 +439,7 @@ func statusLine(p *game.Player, rules game.Rules) string {
 	if faction == "" {
 		faction = "unaffiliated"
 	}
-	return fmt.Sprintf("[GRID] %s | Rep %d | district %s | next %s | rating %d | faction %s | id %s", p.Nick, p.Level, p.District, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, identity)
+	return fmt.Sprintf("[GRID] %s | Rep %d | district %s | heat %d/%d | next %s | rating %d | faction %s | id %s", p.Nick, p.Level, p.District, p.Heat, game.MaxHeat, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, identity)
 }
 
 func gearLine(p *game.Player) string {

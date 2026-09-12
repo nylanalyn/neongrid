@@ -11,6 +11,8 @@ import (
 
 var ErrRunnerNotFound = errors.New("runner not found")
 
+const MaxHeat = 100
+
 const (
 	ActivityChat Activity = iota
 	ActivityAction
@@ -79,6 +81,8 @@ type Player struct {
 	NextEncounterAt time.Time
 	District        string
 	NextDistrictAt  time.Time
+	Heat            int
+	LastHeatAt      time.Time
 	Faction         string
 	Equipment       map[string]Item
 }
@@ -132,6 +136,7 @@ type Rules struct {
 	EncounterInterval         time.Duration
 	CityEventInterval         time.Duration
 	DistrictInterval          time.Duration
+	HeatDecayInterval         time.Duration
 	PirateDuration            time.Duration
 	GuestRetention            time.Duration
 }
@@ -175,6 +180,9 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 	if rules.DistrictInterval < time.Second {
 		rules.DistrictInterval = 6 * time.Hour
 	}
+	if rules.HeatDecayInterval < time.Second {
+		rules.HeatDecayInterval = 30 * time.Minute
+	}
 	if rules.PirateDuration < time.Second {
 		rules.PirateDuration = 5 * time.Minute
 	}
@@ -191,8 +199,10 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 		if p.Level < 1 {
 			p.Level = 1
 		}
+		p.Heat = clampHeat(p.Heat)
 		p.Connected = false
 		p.LastProgressAt = now
+		p.LastHeatAt = now
 		ensureEquipment(p)
 		if !validDistrict(p.District) {
 			p.District = DistrictNeonMarket
@@ -265,6 +275,7 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 	p.Connected = true
 	p.LastSeenAt = now
 	p.LastProgressAt = now
+	p.LastHeatAt = now
 	ensureEquipment(p)
 	if err := e.repo.Save(p); err != nil {
 		return nil, err
@@ -304,6 +315,7 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 	guest.Connected = true
 	guest.LastSeenAt = now
 	guest.LastProgressAt = now
+	guest.LastHeatAt = now
 	e.users[identity] = guest
 	if err := e.repo.Save(guest); err != nil {
 		return nil, err
@@ -370,9 +382,11 @@ func (e *Engine) Disconnect(nick string, kind Activity, now time.Time) (int64, e
 	e.advanceLocked(p, now)
 	penalty := PenaltySeconds(p.Level, kind, 0, e.rules)
 	p.ProgressSeconds -= penalty
+	p.Heat = addHeat(p.Heat, disconnectHeat(kind))
 	p.Connected = false
 	p.LastSeenAt = now
 	p.LastProgressAt = now
+	p.LastHeatAt = now
 	if err := e.repo.Save(p); err != nil {
 		return 0, err
 	}
@@ -389,6 +403,7 @@ func (e *Engine) DisconnectAll(now time.Time) error {
 		e.advanceLocked(p, now)
 		p.Connected = false
 		p.LastProgressAt = now
+		p.LastHeatAt = now
 		if err := e.repo.Save(p); err != nil {
 			return err
 		}
@@ -413,6 +428,7 @@ func (e *Engine) Rename(oldNick, newNick string, now time.Time) (int64, error) {
 	e.advanceLocked(p, now)
 	penalty := PenaltySeconds(p.Level, ActivityNick, 0, e.rules)
 	p.ProgressSeconds -= penalty
+	p.Heat = addHeat(p.Heat, 4)
 	p.Nick = newNick
 	if p.Guest {
 		p.Identity = newKey
@@ -595,7 +611,7 @@ func (r Rules) LevelDuration(level int) int64 {
 func newPlayer(identity, nick, account string, now time.Time) *Player {
 	return &Player{
 		Identity: identity, Account: account, Nick: nick, Guest: account == "", Level: 1,
-		LastProgressAt: now, LastSeenAt: now, NextEncounterAt: now, District: DistrictNeonMarket,
+		LastProgressAt: now, LastSeenAt: now, NextEncounterAt: now, LastHeatAt: now, District: DistrictNeonMarket,
 		Equipment: make(map[string]Item),
 	}
 }
@@ -622,15 +638,23 @@ func (e *Engine) findLocked(identity, nick string) *Player {
 func (e *Engine) advanceLocked(p *Player, now time.Time) {
 	if !p.Connected {
 		p.LastProgressAt = now
+		p.LastHeatAt = now
 		return
 	}
 	if p.LastProgressAt.IsZero() {
 		p.LastProgressAt = now
 	}
+	if p.LastHeatAt.IsZero() {
+		p.LastHeatAt = now
+	}
 	elapsed := int64(now.Sub(p.LastProgressAt) / time.Second)
 	if elapsed > 0 {
 		p.ProgressSeconds += elapsed
 		p.LastProgressAt = p.LastProgressAt.Add(time.Duration(elapsed) * time.Second)
+	}
+	if elapsedHeat := int64(now.Sub(p.LastHeatAt) / e.rules.HeatDecayInterval); elapsedHeat > 0 {
+		p.Heat = clampHeat(p.Heat - int(elapsedHeat))
+		p.LastHeatAt = p.LastHeatAt.Add(time.Duration(elapsedHeat) * e.rules.HeatDecayInterval)
 	}
 	for p.ProgressSeconds >= e.rules.LevelDuration(p.Level) {
 		p.ProgressSeconds -= e.rules.LevelDuration(p.Level)
@@ -665,13 +689,15 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 		rating += 2
 	}
 	rating += districtEncounterBonus(p.District)
-	threat := 1 + e.rng.Intn(max(2, rating+5))
+	rating += p.Heat / 20
+	threat := 1 + e.rng.Intn(max(2, rating+5+p.Heat/10))
 	if rating >= threat {
 		gain := max64(10, e.rules.LevelDuration(p.Level)/20)
 		if p.Faction == FactionChrome {
 			gain = gain * 3 / 2
 		}
 		p.ProgressSeconds += gain
+		p.Heat = addHeat(p.Heat, 2)
 		item, err := e.rareLootLocked(p)
 		if err != nil {
 			return "", err
@@ -689,11 +715,12 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 		loss = loss * 3 / 2
 	}
 	p.ProgressSeconds -= loss
+	p.Heat = addHeat(p.Heat, 8)
 	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick), nil
 }
 
 func (e *Engine) rareLootLocked(p *Player) (*Item, error) {
-	if e.rng.Intn(100) >= rareLootChancePercent {
+	if e.rng.Intn(100) >= rareLootChance(p) {
 		return nil, nil
 	}
 	start := e.rng.Intn(len(rareItems))
@@ -712,6 +739,10 @@ func (e *Engine) rareLootLocked(p *Player) (*Item, error) {
 		return item, nil
 	}
 	return nil, nil
+}
+
+func rareLootChance(p *Player) int {
+	return min(100, rareLootChancePercent+p.Heat/10)
 }
 
 func (e *Engine) randomDistrictLocked(current string) string {
@@ -755,6 +786,31 @@ func validFaction(faction string) bool {
 	}
 }
 
+func disconnectHeat(kind Activity) int {
+	switch kind {
+	case ActivityKick:
+		return 15
+	case ActivityPart, ActivityQuit:
+		return 5
+	default:
+		return 0
+	}
+}
+
+func addHeat(heat, amount int) int {
+	return clampHeat(heat + amount)
+}
+
+func clampHeat(heat int) int {
+	if heat < 0 {
+		return 0
+	}
+	if heat > MaxHeat {
+		return MaxHeat
+	}
+	return heat
+}
+
 func (e *Engine) rememberLocked(messages ...string) error {
 	if len(messages) == 0 {
 		return nil
@@ -776,7 +832,11 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 		if !p.Connected {
 			continue
 		}
+		e.advanceLocked(p, now)
 		p.ProgressSeconds += cityEventProgressChange(event, p)
+		if event.kind == cityEventCorporateSweep {
+			p.Heat = addHeat(p.Heat, 10)
+		}
 		applyCityEventGear(event, p)
 		if event.kind == cityEventDataLeak {
 			// Fresh intel draws an ICE trace forward so the next passive encounter arrives sooner.
@@ -908,6 +968,13 @@ func formatDuration(d time.Duration) string {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

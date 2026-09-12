@@ -61,6 +61,7 @@ type EventConfig struct {
 	CityEventMinutes int `yaml:"city_event_minutes"`
 	PirateMinutes    int `yaml:"pirate_minutes"`
 	DistrictHours    int `yaml:"district_hours"`
+	HeatDecayMinutes int `yaml:"heat_decay_minutes"`
 }
 
 func Defaults() Config {
@@ -75,7 +76,7 @@ func Defaults() Config {
 			ActionBaseSeconds: 45, ActionPerLevelSeconds: 7, ActionPerCharacterSeconds: 1,
 			NickSeconds: 90, PartSeconds: 180, QuitSeconds: 240, KickSeconds: 360,
 		},
-		Events:             EventConfig{TickSeconds: 30, EncounterMinutes: 60, CityEventMinutes: 120, PirateMinutes: 5, DistrictHours: 6},
+		Events:             EventConfig{TickSeconds: 30, EncounterMinutes: 60, CityEventMinutes: 120, PirateMinutes: 5, DistrictHours: 6, HeatDecayMinutes: 30},
 		GuestRetentionDays: 14, ReconnectSeconds: 10,
 	}
 }
@@ -136,6 +137,7 @@ func (c Config) Rules() game.Rules {
 		EncounterInterval:         durationMinutes(c.Events.EncounterMinutes, 60),
 		CityEventInterval:         durationMinutes(c.Events.CityEventMinutes, 120),
 		DistrictInterval:          time.Duration(maxInt(c.Events.DistrictHours, 6)) * time.Hour,
+		HeatDecayInterval:         durationMinutes(c.Events.HeatDecayMinutes, 30),
 		PirateDuration:            durationMinutes(c.Events.PirateMinutes, 5),
 		GuestRetention:            durationDays(c.GuestRetentionDays, 14),
 	}
@@ -247,7 +249,10 @@ func applyEnv(c *Config) error {
 	if err := intEnv("NEONGRID_EVENTS_PIRATE_MINUTES", &c.Events.PirateMinutes); err != nil {
 		return err
 	}
-	return intEnv("NEONGRID_EVENTS_DISTRICT_HOURS", &c.Events.DistrictHours)
+	if err := intEnv("NEONGRID_EVENTS_DISTRICT_HOURS", &c.Events.DistrictHours); err != nil {
+		return err
+	}
+	return intEnv("NEONGRID_EVENTS_HEAT_DECAY_MINUTES", &c.Events.HeatDecayMinutes)
 }
 
 func str(name string, target *string) {

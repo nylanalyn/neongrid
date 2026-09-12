@@ -15,7 +15,7 @@ import (
 
 type Store struct{ db *sql.DB }
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
 )`); err != nil {
 				return err
 			}
+		case 3:
+			if _, err := tx.Exec("ALTER TABLE players ADD COLUMN heat INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("ALTER TABLE players ADD COLUMN last_heat_at INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported schema version %d", version)
 		}
@@ -101,7 +108,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 }
 
 func (s *Store) LoadAll() ([]*game.Player, error) {
-	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, faction, equipment_json FROM players`)
+	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, heat, last_heat_at, faction, equipment_json FROM players`)
 	if err != nil {
 		return nil, err
 	}
@@ -129,16 +136,17 @@ func (s *Store) save(exec interface {
 		return err
 	}
 	_, err = exec.Exec(`
-INSERT INTO players(identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, faction, equipment_json)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO players(identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, heat, last_heat_at, faction, equipment_json)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(identity) DO UPDATE SET
  account=excluded.account, nick=excluded.nick, guest=excluded.guest, level=excluded.level,
  progress_seconds=excluded.progress_seconds, last_progress_at=excluded.last_progress_at,
  connected=excluded.connected, last_seen_at=excluded.last_seen_at, next_encounter_at=excluded.next_encounter_at,
  district=excluded.district, next_district_at=excluded.next_district_at,
+ heat=excluded.heat, last_heat_at=excluded.last_heat_at,
  faction=excluded.faction, equipment_json=excluded.equipment_json`,
 		p.Identity, p.Account, p.Nick, boolInt(p.Guest), p.Level, p.ProgressSeconds,
-		unix(p.LastProgressAt), boolInt(p.Connected), unix(p.LastSeenAt), unix(p.NextEncounterAt), p.District, unix(p.NextDistrictAt), p.Faction, string(equipment))
+		unix(p.LastProgressAt), boolInt(p.Connected), unix(p.LastSeenAt), unix(p.NextEncounterAt), p.District, unix(p.NextDistrictAt), p.Heat, unix(p.LastHeatAt), p.Faction, string(equipment))
 	return err
 }
 
@@ -196,7 +204,7 @@ func (s *Store) MigrateGuest(guestKey, accountKey, account, nick string) (*game.
 }
 
 func (s *Store) Top(limit int) ([]*game.Player, error) {
-	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, faction, equipment_json FROM players ORDER BY level DESC, progress_seconds DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, heat, last_heat_at, faction, equipment_json FROM players ORDER BY level DESC, progress_seconds DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -271,13 +279,15 @@ type scanner interface{ Scan(...any) error }
 func scanPlayer(row scanner) (*game.Player, error) {
 	var p game.Player
 	var guest, connected int
-	var lastProgress, lastSeen, nextEncounter, nextDistrict int64
+	var lastProgress, lastSeen, nextEncounter, nextDistrict, lastHeat int64
+	var heat int
 	var equipment string
-	if err := row.Scan(&p.Identity, &p.Account, &p.Nick, &guest, &p.Level, &p.ProgressSeconds, &lastProgress, &connected, &lastSeen, &nextEncounter, &p.District, &nextDistrict, &p.Faction, &equipment); err != nil {
+	if err := row.Scan(&p.Identity, &p.Account, &p.Nick, &guest, &p.Level, &p.ProgressSeconds, &lastProgress, &connected, &lastSeen, &nextEncounter, &p.District, &nextDistrict, &heat, &lastHeat, &p.Faction, &equipment); err != nil {
 		return nil, err
 	}
 	p.Guest, p.Connected = guest != 0, connected != 0
 	p.LastProgressAt, p.LastSeenAt, p.NextEncounterAt, p.NextDistrictAt = fromUnix(lastProgress), fromUnix(lastSeen), fromUnix(nextEncounter), fromUnix(nextDistrict)
+	p.Heat, p.LastHeatAt = heat, fromUnix(lastHeat)
 	if equipment == "" {
 		equipment = "{}"
 	}
@@ -291,7 +301,7 @@ func scanPlayer(row scanner) (*game.Player, error) {
 }
 
 func loadByKey(tx *sql.Tx, key string) (*game.Player, error) {
-	row := tx.QueryRow(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, faction, equipment_json FROM players WHERE identity = ?`, key)
+	row := tx.QueryRow(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, district, next_district_at, heat, last_heat_at, faction, equipment_json FROM players WHERE identity = ?`, key)
 	p, err := scanPlayer(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -312,6 +322,12 @@ func merge(guest, account *game.Player) *game.Player {
 	}
 	if guest.LastSeenAt.After(account.LastSeenAt) {
 		result.District, result.NextDistrictAt = guest.District, guest.NextDistrictAt
+	}
+	if guest.Heat > result.Heat {
+		result.Heat = guest.Heat
+	}
+	if guest.LastHeatAt.After(result.LastHeatAt) {
+		result.LastHeatAt = guest.LastHeatAt
 	}
 	for slot, item := range guest.Equipment {
 		if item.Rating > result.Equipment[slot].Rating {
