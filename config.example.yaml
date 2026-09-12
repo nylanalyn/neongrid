@@ -38,6 +38,7 @@ events:
   encounter_minutes: 60
   city_event_minutes: 120
   pirate_minutes: 5
+  district_hours: 6
 
 guest_retention_days: 14
 reconnect_seconds: 10

@@ -56,7 +56,7 @@ func testRules() Rules {
 		SpeechBaseSeconds: 20, SpeechPerLevelSeconds: 5, SpeechPerCharacterSeconds: 1,
 		ActionBaseSeconds: 30, ActionPerLevelSeconds: 5, ActionPerCharacterSeconds: 1,
 		NickPenaltySeconds: 40, PartPenaltySeconds: 50, QuitPenaltySeconds: 60, KickPenaltySeconds: 70,
-		EncounterInterval: time.Hour, CityEventInterval: time.Hour, PirateDuration: time.Minute,
+		EncounterInterval: time.Hour, CityEventInterval: time.Hour, DistrictInterval: time.Hour, PirateDuration: time.Minute,
 		GuestRetention: 24 * time.Hour,
 	}
 }
@@ -277,5 +277,38 @@ func TestRecentEventsReturnsNewestFirst(t *testing.T) {
 	events := e.RecentEvents(2)
 	if len(events) != 2 || events[0] != second || events[1] != first {
 		t.Fatalf("recent events = %#v", events)
+	}
+}
+
+func TestConnectedRunnerDriftsDistricts(t *testing.T) {
+	now := time.Unix(8000, 0)
+	rules := testRules()
+	rules.EncounterInterval = 24 * time.Hour
+	rules.CityEventInterval = 24 * time.Hour
+	e, err := New(newMemoryRepo(), rules, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Tick(now.Add(time.Hour + time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.Status(AccountKey("acct"), "runner", now.Add(time.Hour+time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.District == DistrictNeonMarket || !validDistrict(p.District) || !p.NextDistrictAt.After(now) {
+		t.Fatalf("district state = %+v", p)
+	}
+}
+
+func TestDistrictEncounterModifiers(t *testing.T) {
+	if districtEncounterBonus(DistrictCorporateArcology) <= districtEncounterBonus(DistrictNeonMarket) {
+		t.Fatal("corporate arcology should improve ICE odds")
+	}
+	if districtEncounterBonus(DistrictGhostQuarter) >= districtEncounterBonus(DistrictNeonMarket) {
+		t.Fatal("ghost quarter should worsen ICE odds")
 	}
 }

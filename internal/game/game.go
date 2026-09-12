@@ -36,6 +36,22 @@ const (
 	FactionNomad     = "nomad"
 )
 
+const (
+	DistrictNeonMarket        = "Neon Market"
+	DistrictFloodline         = "Floodline"
+	DistrictCorporateArcology = "Corporate Arcology"
+	DistrictOldTransit        = "Old Transit"
+	DistrictGhostQuarter      = "Ghost Quarter"
+)
+
+var districts = []string{
+	DistrictNeonMarket,
+	DistrictFloodline,
+	DistrictCorporateArcology,
+	DistrictOldTransit,
+	DistrictGhostQuarter,
+}
+
 var equipmentSlots = []string{
 	SlotWeaponRig,
 	SlotArmorPlating,
@@ -60,6 +76,8 @@ type Player struct {
 	Connected       bool
 	LastSeenAt      time.Time
 	NextEncounterAt time.Time
+	District        string
+	NextDistrictAt  time.Time
 	Faction         string
 	Equipment       map[string]Item
 }
@@ -100,6 +118,7 @@ type Rules struct {
 	KickPenaltySeconds        int64
 	EncounterInterval         time.Duration
 	CityEventInterval         time.Duration
+	DistrictInterval          time.Duration
 	PirateDuration            time.Duration
 	GuestRetention            time.Duration
 }
@@ -139,6 +158,9 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 	if rules.CityEventInterval < time.Second {
 		rules.CityEventInterval = 2 * time.Hour
 	}
+	if rules.DistrictInterval < time.Second {
+		rules.DistrictInterval = 6 * time.Hour
+	}
 	if rules.PirateDuration < time.Second {
 		rules.PirateDuration = 5 * time.Minute
 	}
@@ -158,6 +180,12 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 		p.Connected = false
 		p.LastProgressAt = now
 		ensureEquipment(p)
+		if !validDistrict(p.District) {
+			p.District = DistrictNeonMarket
+		}
+		if p.NextDistrictAt.IsZero() {
+			p.NextDistrictAt = now.Add(rules.DistrictInterval)
+		}
 		if p.NextEncounterAt.IsZero() {
 			p.NextEncounterAt = now.Add(rules.EncounterInterval)
 		}
@@ -212,6 +240,7 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 	if p == nil {
 		p = newPlayer(identity, nick, account, now)
 		p.NextEncounterAt = now.Add(e.rules.EncounterInterval)
+		p.NextDistrictAt = now.Add(e.rules.DistrictInterval)
 		e.users[identity] = p
 	} else if p.Connected {
 		e.advanceLocked(p, now)
@@ -444,6 +473,12 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 		}
 		oldLevel := p.Level
 		e.advanceLocked(p, now)
+		if !p.NextDistrictAt.IsZero() && !now.Before(p.NextDistrictAt) {
+			oldDistrict := p.District
+			p.District = e.randomDistrictLocked(oldDistrict)
+			p.NextDistrictAt = now.Add(e.rules.DistrictInterval)
+			messages = append(messages, fmt.Sprintf("[GRID] %s drifted from %s to %s.", p.Nick, oldDistrict, p.District))
+		}
 		if !p.NextEncounterAt.IsZero() && !now.Before(p.NextEncounterAt) {
 			messages = append(messages, e.encounterLocked(p))
 			p.NextEncounterAt = now.Add(e.rules.EncounterInterval)
@@ -537,7 +572,7 @@ func (r Rules) LevelDuration(level int) int64 {
 func newPlayer(identity, nick, account string, now time.Time) *Player {
 	return &Player{
 		Identity: identity, Account: account, Nick: nick, Guest: account == "", Level: 1,
-		LastProgressAt: now, LastSeenAt: now, NextEncounterAt: now,
+		LastProgressAt: now, LastSeenAt: now, NextEncounterAt: now, District: DistrictNeonMarket,
 		Equipment: make(map[string]Item),
 	}
 }
@@ -588,6 +623,7 @@ func (e *Engine) encounterLocked(p *Player) string {
 	if p.Faction == FactionGhostline {
 		rating += 2
 	}
+	rating += districtEncounterBonus(p.District)
 	threat := 1 + e.rng.Intn(max(2, rating+5))
 	if rating >= threat {
 		gain := max64(10, e.rules.LevelDuration(p.Level)/20)
@@ -601,8 +637,43 @@ func (e *Engine) encounterLocked(p *Player) string {
 	if p.Faction == FactionNomad {
 		loss = max64(3, loss/2)
 	}
+	if p.District == DistrictGhostQuarter {
+		loss = loss * 3 / 2
+	}
 	p.ProgressSeconds -= loss
 	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick)
+}
+
+func (e *Engine) randomDistrictLocked(current string) string {
+	options := make([]string, 0, len(districts)-1)
+	for _, district := range districts {
+		if district != current {
+			options = append(options, district)
+		}
+	}
+	return options[e.rng.Intn(len(options))]
+}
+
+func districtEncounterBonus(district string) int {
+	switch district {
+	case DistrictCorporateArcology:
+		return 2
+	case DistrictOldTransit:
+		return 1
+	case DistrictGhostQuarter:
+		return -2
+	default:
+		return 0
+	}
+}
+
+func validDistrict(district string) bool {
+	for _, known := range districts {
+		if district == known {
+			return true
+		}
+	}
+	return false
 }
 
 func validFaction(faction string) bool {

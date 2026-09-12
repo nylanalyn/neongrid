@@ -32,7 +32,7 @@ If the endpoint is known to require that legacy mode, set `tls12_only: true` (or
 
 ## Commands
 
-- `!status` / `!runner` — show Rep, next level time, gear rating, and identity
+- `!status` / `!runner` — show Rep, district, next level time, gear rating, and identity
 - `!top` — show the leaderboard
 - `!gear` — show the current equipment loadout
 - `!world` — show pirate-frequency and city-event timing
@@ -43,7 +43,7 @@ If the endpoint is known to require that legacy mode, set `tls12_only: true` (or
 
 Factions are permanent: Ghostline improves ICE odds, Chrome increases successful shard gains, and Nomad reduces failed-encounter losses. City events now also apply small progress boosts or setbacks to active runners; pirate-frequency events remain safe-chat windows.
 
-Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration.
+Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval.
 
 ## Configuration
 
