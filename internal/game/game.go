@@ -14,6 +14,11 @@ var ErrRunnerNotFound = errors.New("runner not found")
 const MaxHeat = 100
 
 const (
+	factionSwapDuration = 24 * time.Hour
+	factionSwapWeek     = 7 * 24 * time.Hour
+)
+
+const (
 	ActivityChat Activity = iota
 	ActivityAction
 	ActivityNick
@@ -76,32 +81,36 @@ type Item struct {
 }
 
 type Player struct {
-	Identity        string
-	Account         string
-	Nick            string
-	Guest           bool
-	Level           int
-	ProgressSeconds int64
-	LastProgressAt  time.Time
-	Connected       bool
-	LastSeenAt      time.Time
-	NextEncounterAt time.Time
-	NextCollisionAt time.Time
-	District        string
-	NextDistrictAt  time.Time
-	Heat            int
-	LastHeatAt      time.Time
-	Faction         string
-	Equipment       map[string]Item
-	Scars           []string
-	Titles          []string
+	Identity          string
+	Account           string
+	Nick              string
+	Guest             bool
+	Level             int
+	ProgressSeconds   int64
+	LastProgressAt    time.Time
+	Connected         bool
+	LastSeenAt        time.Time
+	NextEncounterAt   time.Time
+	NextCollisionAt   time.Time
+	District          string
+	NextDistrictAt    time.Time
+	Heat              int
+	LastHeatAt        time.Time
+	Faction           string
+	LastFactionSwapAt time.Time
+	Equipment         map[string]Item
+	Scars             []string
+	Titles            []string
 }
 
 type WorldState struct {
-	PirateUntil     time.Time
-	NextCityEventAt time.Time
-	RecentEvents    []string
-	Contract        *Contract
+	PirateUntil          time.Time
+	NextCityEventAt      time.Time
+	FactionSwapUntil     time.Time
+	FactionSwapStartedAt time.Time
+	NextFactionSwapAt    time.Time
+	RecentEvents         []string
+	Contract             *Contract
 }
 
 type Contract struct {
@@ -256,8 +265,16 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 	if err != nil {
 		return nil, err
 	}
+	worldChanged := false
 	if world.NextCityEventAt.IsZero() {
 		world.NextCityEventAt = now.Add(rules.CityEventInterval)
+		worldChanged = true
+	}
+	if world.NextFactionSwapAt.IsZero() {
+		world.NextFactionSwapAt = nextFactionSwapAt(now, rng)
+		worldChanged = true
+	}
+	if worldChanged {
 		if err := repo.SaveWorldState(world); err != nil {
 			return nil, err
 		}
@@ -385,11 +402,22 @@ func (e *Engine) SetFaction(identity, nick, faction string, now time.Time) (*Pla
 	if p == nil {
 		return nil, ErrRunnerNotFound
 	}
+	if p.Faction == faction {
+		return nil, errors.New("runner already uses that faction")
+	}
 	if p.Faction != "" {
-		return nil, errors.New("faction is already locked")
+		if !e.factionSwapOpenLocked(now) {
+			return nil, errors.New("faction is already locked")
+		}
+		if !p.LastFactionSwapAt.Before(e.world.FactionSwapStartedAt) {
+			return nil, errors.New("faction crash respec already used")
+		}
 	}
 	e.advanceLocked(p, now)
 	p.Faction = faction
+	if e.factionSwapOpenLocked(now) {
+		p.LastFactionSwapAt = now
+	}
 	p.LastSeenAt = now
 	if err := e.repo.Save(p); err != nil {
 		return nil, err
@@ -550,6 +578,11 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var messages []string
+	if message, err := e.factionSwapTickLocked(now); err != nil {
+		return nil, err
+	} else if message != "" {
+		messages = append(messages, message)
+	}
 	if message, err := e.resolveContractLocked(now); err != nil {
 		return nil, err
 	} else if message != "" {
@@ -615,6 +648,34 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 		return nil, err
 	}
 	return messages, nil
+}
+
+func (e *Engine) factionSwapTickLocked(now time.Time) (string, error) {
+	if !e.world.FactionSwapUntil.IsZero() && !now.Before(e.world.FactionSwapUntil) {
+		e.world.FactionSwapUntil = time.Time{}
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return "", err
+		}
+		return "[GRID] SYSTEM RESTORED: faction locks are back online.", nil
+	}
+	if e.world.FactionSwapUntil.IsZero() && !e.world.NextFactionSwapAt.IsZero() && !now.Before(e.world.NextFactionSwapAt) {
+		e.world.FactionSwapStartedAt = now
+		e.world.FactionSwapUntil = now.Add(factionSwapDuration)
+		e.world.NextFactionSwapAt = nextFactionSwapAt(now, e.rng)
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return "", err
+		}
+		return "[GRID] SYSTEM CRASH: faction locks are unstable for 24 hours. Use !faction <name> to respec once, or stay the course.", nil
+	}
+	return "", nil
+}
+
+func (e *Engine) factionSwapOpenLocked(now time.Time) bool {
+	return !e.world.FactionSwapStartedAt.IsZero() && !e.world.FactionSwapUntil.IsZero() && now.Before(e.world.FactionSwapUntil)
+}
+
+func nextFactionSwapAt(now time.Time, rng *rand.Rand) time.Time {
+	return now.Add(factionSwapWeek + time.Duration(rng.Intn(7))*24*time.Hour)
 }
 
 func (e *Engine) ForcePirate(now time.Time) (string, error) {

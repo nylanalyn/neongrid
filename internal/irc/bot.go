@@ -373,11 +373,11 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 			client.Cmd.Message(target, "[GRID] faction unavailable: "+err.Error())
 			return
 		}
-		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction locked: %s", p.Faction))
+		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction set: %s", p.Faction))
 	case "help":
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] NeonGrid is an idle-RPG: stay linked to gain Rep. In %s, speech, /me, nick changes, PART, QUIT, and KICK add delay to your next Rep. Other channels are clean.", b.cfg.Channel))
 		client.Cmd.Message(target, "[GRID] Zero-penalty commands: !help !status/!runner !top !gear !world !events. Pirate frequency can temporarily make game-channel chatter safe.")
-		client.Cmd.Message(target, "[GRID] Lock in one faction with !faction <name>: ghostline = better ICE odds; chrome = bigger shard gains; nomad = softer ICE losses.")
+		client.Cmd.Message(target, "[GRID] Choose !faction <name>: ghostline = better ICE odds; chrome = bigger shard gains; nomad = softer ICE losses. A rare 24h system crash permits one respec.")
 		client.Cmd.Message(target, "[GRID] Megacorp Runs may recruit linked runners; !world shows the active contract and deadline.")
 	case "pirate":
 		if !b.isAdmin(account) {
@@ -474,6 +474,7 @@ func gearLine(p *game.Player) string {
 }
 
 func worldLine(world game.WorldState, now time.Time) string {
+	crash := factionSwapLine(world, now)
 	if world.Contract != nil {
 		remaining := world.Contract.EndsAt.Sub(now)
 		if remaining < 0 {
@@ -483,16 +484,41 @@ func worldLine(world game.WorldState, now time.Time) string {
 		if world.PirateUntil.After(now) {
 			line += " Pirate frequency active; transmissions safe."
 		}
+		if crash != "" {
+			line += " " + crash
+		}
 		return line
 	}
 	if world.PirateUntil.After(now) {
-		return "[GRID] pirate frequency active for " + formatPenalty(int64(world.PirateUntil.Sub(now)/time.Second)) + "; transmissions safe."
+		line := "[GRID] pirate frequency active for " + formatPenalty(int64(world.PirateUntil.Sub(now)/time.Second)) + "; transmissions safe."
+		if crash != "" {
+			line += " " + crash
+		}
+		return line
 	}
 	remaining := world.NextCityEventAt.Sub(now)
 	if remaining < 0 {
 		remaining = 0
 	}
-	return "[GRID] pirate frequency dormant | next city event in " + formatPenalty(int64(remaining/time.Second))
+	line := "[GRID] pirate frequency dormant | next city event in " + formatPenalty(int64(remaining/time.Second))
+	if crash != "" {
+		line += " | " + crash
+	}
+	return line
+}
+
+func factionSwapLine(world game.WorldState, now time.Time) string {
+	if world.FactionSwapUntil.After(now) {
+		return "system crash active for " + formatPenalty(int64(world.FactionSwapUntil.Sub(now)/time.Second)) + "; one faction respec available."
+	}
+	if !world.NextFactionSwapAt.IsZero() {
+		remaining := world.NextFactionSwapAt.Sub(now)
+		if remaining < 0 {
+			remaining = 0
+		}
+		return "next system crash in " + formatPenalty(int64(remaining/time.Second))
+	}
+	return ""
 }
 
 func formatPenalty(seconds int64) string {

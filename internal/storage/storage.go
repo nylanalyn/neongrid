@@ -143,7 +143,7 @@ func (s *Store) save(exec interface {
 	if err != nil {
 		return err
 	}
-	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles})
+	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles, LastFactionSwapAt: p.LastFactionSwapAt})
 	if err != nil {
 		return err
 	}
@@ -265,6 +265,12 @@ func (s *Store) LoadWorldState() (game.WorldState, error) {
 			state.PirateUntil = fromUnix(seconds)
 		case "next_city_event_at":
 			state.NextCityEventAt = fromUnix(seconds)
+		case "faction_swap_until":
+			state.FactionSwapUntil = fromUnix(seconds)
+		case "faction_swap_started_at":
+			state.FactionSwapStartedAt = fromUnix(seconds)
+		case "next_faction_swap_at":
+			state.NextFactionSwapAt = fromUnix(seconds)
 		}
 	}
 	return state, rows.Err()
@@ -285,10 +291,13 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 	}
 	defer tx.Rollback()
 	for key, value := range map[string]string{
-		"pirate_until":       fmt.Sprint(unix(state.PirateUntil)),
-		"next_city_event_at": fmt.Sprint(unix(state.NextCityEventAt)),
-		"recent_events":      string(recentEvents),
-		"active_contract":    string(contract),
+		"pirate_until":            fmt.Sprint(unix(state.PirateUntil)),
+		"next_city_event_at":      fmt.Sprint(unix(state.NextCityEventAt)),
+		"faction_swap_until":      fmt.Sprint(unix(state.FactionSwapUntil)),
+		"faction_swap_started_at": fmt.Sprint(unix(state.FactionSwapStartedAt)),
+		"next_faction_swap_at":    fmt.Sprint(unix(state.NextFactionSwapAt)),
+		"recent_events":           string(recentEvents),
+		"active_contract":         string(contract),
 	} {
 		if _, err := tx.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 			return err
@@ -300,8 +309,9 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 type scanner interface{ Scan(...any) error }
 
 type playerHistory struct {
-	Scars  []string `json:"scars"`
-	Titles []string `json:"titles"`
+	Scars             []string  `json:"scars"`
+	Titles            []string  `json:"titles"`
+	LastFactionSwapAt time.Time `json:"last_faction_swap_at,omitempty"`
 }
 
 func scanPlayer(row scanner) (*game.Player, error) {
@@ -333,6 +343,7 @@ func scanPlayer(row scanner) (*game.Player, error) {
 		return nil, err
 	}
 	p.Scars, p.Titles = savedHistory.Scars, savedHistory.Titles
+	p.LastFactionSwapAt = savedHistory.LastFactionSwapAt
 	return &p, nil
 }
 
@@ -364,6 +375,9 @@ func merge(guest, account *game.Player) *game.Player {
 	}
 	if guest.LastHeatAt.After(result.LastHeatAt) {
 		result.LastHeatAt = guest.LastHeatAt
+	}
+	if guest.LastFactionSwapAt.After(result.LastFactionSwapAt) {
+		result.LastFactionSwapAt = guest.LastFactionSwapAt
 	}
 	for slot, item := range guest.Equipment {
 		if item.Rating > result.Equipment[slot].Rating {

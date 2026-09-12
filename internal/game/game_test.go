@@ -263,6 +263,47 @@ func TestFactionChoiceIsPermanent(t *testing.T) {
 	}
 }
 
+func TestSystemCrashAllowsOneFactionRespec(t *testing.T) {
+	now := time.Unix(5250, 0)
+	rules := testRules()
+	rules.EncounterInterval = 72 * time.Hour
+	rules.CityEventInterval = 72 * time.Hour
+	rules.DistrictInterval = 72 * time.Hour
+	rules.ContractDuration = 72 * time.Hour
+	e, err := New(newMemoryRepo(), rules, rand.New(rand.NewSource(2)), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.SetFaction(AccountKey("acct"), "runner", FactionGhostline, now); err != nil {
+		t.Fatal(err)
+	}
+	e.world.NextFactionSwapAt = now
+	messages, err := e.Tick(now)
+	if err != nil || len(messages) == 0 || !strings.Contains(messages[0], "SYSTEM CRASH") {
+		t.Fatalf("system crash start = %#v, %v", messages, err)
+	}
+	if _, err = e.SetFaction(AccountKey("acct"), "runner", FactionNomad, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.SetFaction(AccountKey("acct"), "runner", FactionChrome, now.Add(2*time.Hour)); err == nil {
+		t.Fatal("second respec succeeded during one crash")
+	}
+	p, err := e.Status(AccountKey("acct"), "runner", now.Add(2*time.Hour))
+	if err != nil || p.Faction != FactionNomad {
+		t.Fatalf("respec faction = %+v, %v", p, err)
+	}
+	messages, err = e.Tick(now.Add(25 * time.Hour))
+	if err != nil || len(messages) == 0 || !strings.Contains(messages[0], "SYSTEM RESTORED") {
+		t.Fatalf("system crash end = %#v, %v", messages, err)
+	}
+	if _, err = e.SetFaction(AccountKey("acct"), "runner", FactionChrome, now.Add(26*time.Hour)); err == nil {
+		t.Fatal("respec succeeded after crash ended")
+	}
+}
+
 func TestCityEventProgressChangesAreMeaningful(t *testing.T) {
 	for _, event := range cityEvents {
 		if event.progressChange == 0 {

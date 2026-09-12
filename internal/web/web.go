@@ -223,13 +223,20 @@ func worldSummary(world game.WorldState, now time.Time) string {
 		}
 		parts = append(parts, status)
 	}
+	if world.FactionSwapUntil.After(now) {
+		parts = append(parts, "SYSTEM CRASH active · one faction respec available for "+durationText(world.FactionSwapUntil.Sub(now)))
+	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " | ")
 	}
 	if world.NextCityEventAt.IsZero() {
 		return "Grid quiet · waiting for the next city event"
 	}
-	return "City event window in " + durationText(world.NextCityEventAt.Sub(now))
+	status := "City event window in " + durationText(world.NextCityEventAt.Sub(now))
+	if !world.NextFactionSwapAt.IsZero() {
+		status += " · next system crash in " + durationText(world.NextFactionSwapAt.Sub(now))
+	}
+	return status
 }
 
 func durationText(duration time.Duration) string {

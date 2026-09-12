@@ -22,7 +22,8 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 		ProgressSeconds: 12, LastProgressAt: now, LastSeenAt: now, Connected: true,
 		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour), NextCollisionAt: now.Add(2 * time.Hour),
 		Heat: 42, LastHeatAt: now,
-		Scars: []string{game.ScarBurnedOptic}, Titles: []string{"ICEbreaker"},
+		LastFactionSwapAt: now.Add(3 * time.Hour),
+		Scars:             []string{game.ScarBurnedOptic}, Titles: []string{"ICEbreaker"},
 		Equipment: map[string]game.Item{game.SlotWeaponRig: {Name: "Mono-edge Mk 1", Rating: 1, Unique: true}},
 	}
 	if err := store.Save(guest); err != nil {
@@ -50,6 +51,9 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	if len(loaded[0].Scars) != 1 || loaded[0].Scars[0] != game.ScarBurnedOptic || loaded[0].CurrentTitle() != "ICEbreaker" {
 		t.Fatalf("runner history did not round-trip: %+v", loaded[0])
 	}
+	if !loaded[0].LastFactionSwapAt.Equal(now.Add(3 * time.Hour)) {
+		t.Fatalf("faction respec timestamp did not round-trip: %+v", loaded[0])
+	}
 
 	bound, err := store.MigrateGuest(game.GuestKey("runner"), game.AccountKey("nylan"), "nylan", "runner")
 	if err != nil {
@@ -72,9 +76,10 @@ func TestWorldEventHistoryRoundTrip(t *testing.T) {
 	defer store.Close()
 
 	want := game.WorldState{
-		PirateUntil:     time.Unix(1000, 0),
-		NextCityEventAt: time.Unix(1100, 0),
-		RecentEvents:    []string{"[GRID] DATA LEAK", "[GRID] PIRATE FREQUENCY"},
+		PirateUntil:          time.Unix(1000, 0),
+		NextCityEventAt:      time.Unix(1100, 0),
+		FactionSwapStartedAt: time.Unix(1050, 0), FactionSwapUntil: time.Unix(1060, 0), NextFactionSwapAt: time.Unix(2000, 0),
+		RecentEvents: []string{"[GRID] DATA LEAK", "[GRID] PIRATE FREQUENCY"},
 		Contract: &game.Contract{
 			Title: "Helix Dynamics breach", District: game.DistrictCorporateArcology,
 			Participants: []string{"acct:alpha", "acct:beta"}, EndsAt: time.Unix(1200, 0),
@@ -87,7 +92,7 @@ func TestWorldEventHistoryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PirateUntil != want.PirateUntil || got.NextCityEventAt != want.NextCityEventAt || len(got.RecentEvents) != 2 || got.RecentEvents[0] != want.RecentEvents[0] {
+	if got.PirateUntil != want.PirateUntil || got.NextCityEventAt != want.NextCityEventAt || got.FactionSwapStartedAt != want.FactionSwapStartedAt || got.FactionSwapUntil != want.FactionSwapUntil || got.NextFactionSwapAt != want.NextFactionSwapAt || len(got.RecentEvents) != 2 || got.RecentEvents[0] != want.RecentEvents[0] {
 		t.Fatalf("world = %#v, want %#v", got, want)
 	}
 	if got.Contract == nil || got.Contract.Title != want.Contract.Title || got.Contract.District != want.Contract.District || len(got.Contract.Participants) != 2 || !got.Contract.EndsAt.Equal(want.Contract.EndsAt) {

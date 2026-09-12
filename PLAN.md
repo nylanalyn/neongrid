@@ -37,7 +37,7 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 
 ## Future problems
 
-- Add an explicit faction respec/reset path, likely admin-controlled or tied to a future season. Faction choice remains permanent for now.
+- Faction choice is normally permanent; **done:** a rare persisted 24-hour system crash grants each runner one respec.
 
 ## Priority hardening before districts
 

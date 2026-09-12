@@ -90,6 +90,9 @@ func TestWorldLineShowsPirateWindowOrNextEvent(t *testing.T) {
 	if got := worldLine(game.WorldState{Contract: &game.Contract{Title: "Helix Dynamics breach", District: game.DistrictCorporateArcology, EndsAt: now.Add(3 * time.Hour)}}, now); got != "[GRID] contract active: Helix Dynamics breach in Corporate Arcology; 3h0m0s remaining." {
 		t.Fatalf("contract worldLine() = %q", got)
 	}
+	if got := worldLine(game.WorldState{FactionSwapUntil: now.Add(24 * time.Hour)}, now); !strings.Contains(got, "system crash active") || !strings.Contains(got, "respec available") {
+		t.Fatalf("system crash worldLine() = %q", got)
+	}
 }
 
 func TestTLSModes(t *testing.T) {
