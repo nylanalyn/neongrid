@@ -633,8 +633,27 @@ func (e *Engine) Rules() Rules { return e.rules }
 func (e *Engine) World() WorldState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.world
+	return cloneWorld(e.world)
 }
+
+func (e *Engine) Snapshot(now time.Time) ([]*Player, WorldState, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// ponytail: snapshot uses the engine's existing global lock; add a read model if public traffic needs higher throughput.
+	players := make([]*Player, 0, len(e.users))
+	for _, p := range e.users {
+		if p.Connected {
+			e.advanceLocked(p, now)
+			if err := e.repo.Save(p); err != nil {
+				return nil, WorldState{}, err
+			}
+		}
+		players = append(players, clonePlayer(p))
+	}
+	return players, cloneWorld(e.world), nil
+}
+
+func Districts() []string { return append([]string(nil), districts...) }
 
 func (e *Engine) RecentEvents(limit int) []string {
 	e.mu.Lock()
@@ -1317,6 +1336,17 @@ func clonePlayer(p *Player) *Player {
 	copy.Scars = append([]string(nil), p.Scars...)
 	copy.Titles = append([]string(nil), p.Titles...)
 	return &copy
+}
+
+func cloneWorld(world WorldState) WorldState {
+	copy := world
+	copy.RecentEvents = append([]string(nil), world.RecentEvents...)
+	if world.Contract != nil {
+		contract := *world.Contract
+		contract.Participants = append([]string(nil), world.Contract.Participants...)
+		copy.Contract = &contract
+	}
+	return copy
 }
 
 func formatDuration(d time.Duration) string {

@@ -22,6 +22,7 @@ type Config struct {
 	Name               string            `yaml:"name"`
 	Channel            string            `yaml:"channel"`
 	Database           string            `yaml:"database"`
+	WebListen          string            `yaml:"web_listen"`
 	AdminAccounts      []string          `yaml:"admin_accounts"`
 	NickServ           NickServConfig    `yaml:"nickserv"`
 	Progression        ProgressionConfig `yaml:"progression"`
@@ -189,6 +190,7 @@ func applyEnv(c *Config) error {
 	str("NEONGRID_NAME", &c.Name)
 	str("NEONGRID_CHANNEL", &c.Channel)
 	str("NEONGRID_DATABASE", &c.Database)
+	str("NEONGRID_WEB_LISTEN", &c.WebListen)
 	str("NEONGRID_NICKSERV_NAME", &c.NickServ.Name)
 	str("NEONGRID_NICKSERV_PASSWORD", &c.NickServ.Password)
 	str("NEONGRID_NICKSERV_IDENTIFY_COMMAND", &c.NickServ.IdentifyCommand)

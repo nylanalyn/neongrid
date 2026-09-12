@@ -24,6 +24,8 @@ cp config.example.yaml config.yaml
 NEONGRID_NICKSERV_PASSWORD='secret' ./neongrid -config config.yaml
 ```
 
+The example also enables a local read-only observer at [http://127.0.0.1:8080](http://127.0.0.1:8080). Set `web_listen: ''` (or `NEONGRID_WEB_LISTEN=''`) to disable it, or bind it to another address only when the page should be reachable beyond the local machine. It exposes no account controls; IRC remains the game.
+
 The bot requests IRCv3 account identity when available (`account-tag`, `extended-join`, and `account-notify`). It falls back to `WHOIS` account responses and uses temporary `guest:<nick>` identities until a NickServ account is observed. Guest runners are retained for the configured number of days and migrate to the account key without losing progress.
 
 For older IRC endpoints that abort modern TLS negotiation, the bot retries once with the legacy TLS 1.2 RSA/CBC suite required by those servers. Upgrading the server’s TLS configuration is preferable.

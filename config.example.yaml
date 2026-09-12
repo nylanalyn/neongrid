@@ -8,6 +8,8 @@ user: neongrid
 name: NeonGrid runner daemon
 channel: '#neongrid'
 database: data/neongrid.db
+# Optional read-only observer. Empty disables the web page.
+web_listen: 127.0.0.1:8080
 admin_accounts:
   - your_nickserv_account
 

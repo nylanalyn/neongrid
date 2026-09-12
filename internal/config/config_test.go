@@ -12,6 +12,7 @@ func TestTLS12OnlyEnvironmentOverride(t *testing.T) {
 	t.Setenv("NEONGRID_EVENTS_CONTRACT_HOURS", "6")
 	t.Setenv("NEONGRID_EVENTS_CONTRACT_PARTICIPANTS", "3")
 	t.Setenv("NEONGRID_EVENTS_COLLISION_MINUTES", "45")
+	t.Setenv("NEONGRID_WEB_LISTEN", "127.0.0.1:9090")
 	cfg := Defaults()
 	if err := applyEnv(&cfg); err != nil {
 		t.Fatal(err)
@@ -33,5 +34,8 @@ func TestTLS12OnlyEnvironmentOverride(t *testing.T) {
 	}
 	if got := cfg.Rules().CollisionInterval; got != 45*time.Minute {
 		t.Fatalf("collision interval = %s, want 45m", got)
+	}
+	if cfg.WebListen != "127.0.0.1:9090" {
+		t.Fatalf("web listen = %q, want 127.0.0.1:9090", cfg.WebListen)
 	}
 }

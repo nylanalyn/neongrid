@@ -11,6 +11,7 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 - `internal/game`: identity, progression, penalties, equipment, encounters, city events, pirate-frequency safe windows, and commands. No IRC or SQLite knowledge.
 - `internal/storage`: SQLite schema and persistence for runners plus world state.
 - `internal/irc`: IRC connection, account identity discovery, guest binding, channel-only event handling, commands, reconnect loop.
+- `internal/web`: opt-in read-only observer page backed by engine snapshots.
 
 ## MVP rules
 
@@ -31,7 +32,7 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 
 ## Deliberate MVP limits
 
-- No game password, active combat commands, web UI, or external item/event data files.
+- No game password, active combat commands, authenticated web controls, or external item/event data files.
 - Events are lightweight announcements/effects; richer world simulation can follow real usage.
 
 ## Future problems
@@ -56,4 +57,4 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 5. **Long-running contracts done:** Megacorp Runs recruit connected runners, persist a deadline, and reward or penalize the team based on connection integrity.
 6. **Passive runner collisions done:** connected runners can collide automatically in bounded hacks, races, hunts, and drone incidents shaped by gear, faction, district, and Heat.
 7. **Cyberware scars and titles done:** rare passive incidents can leave persistent quirks, while Rep, Heat, and survival milestones award cosmetic titles.
-8. Add a small read-only web status page as the Grid’s observation window; IRC remains the game.
+8. **Read-only web observer done:** an opt-in standard-library page shows active runners, Rep rankings, world state, districts, and recent incidents; IRC remains the game.

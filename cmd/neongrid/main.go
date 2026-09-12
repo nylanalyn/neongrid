@@ -14,6 +14,7 @@ import (
 	"neongrid/internal/game"
 	"neongrid/internal/irc"
 	"neongrid/internal/storage"
+	"neongrid/internal/web"
 )
 
 func main() {
@@ -43,6 +44,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	bot := irc.New(cfg, engine, log.Default())
+	if cfg.WebListen != "" {
+		observer := web.New(engine, cfg.Channel)
+		go func() {
+			if err := observer.Run(ctx, cfg.WebListen); err != nil {
+				log.Printf("web observer: %v", err)
+			}
+		}()
+	}
 	go runScheduler(ctx, engine, bot, cfg.Events.TickSeconds)
 	if err := bot.Run(ctx); err != nil {
 		log.Fatal(err)
