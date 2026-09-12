@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,17 @@ func TestGearLineMarksUniqueArtifacts(t *testing.T) {
 	want := "[GRID] loadout | deck: Blackglass Deck [UNIQUE]"
 	if got != want {
 		t.Fatalf("gearLine() = %q, want %q", got, want)
+	}
+}
+
+func TestStatusLineShowsRunnerHistory(t *testing.T) {
+	got := statusLine(&game.Player{
+		Nick: "runner", Level: 5, District: game.DistrictFloodline, Titles: []string{"ICEbreaker"}, Scars: []string{game.ScarGhostSignal},
+	}, config.Defaults().Rules())
+	for _, want := range []string{"title ICEbreaker", "scars Ghost Signal"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status line %q does not contain %q", got, want)
+		}
 	}
 }
 

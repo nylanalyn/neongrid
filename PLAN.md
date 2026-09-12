@@ -55,5 +55,5 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 4. **Heat done:** a bounded, timestamp-decayed risk/reward signal now shapes ICE odds, rare-loot chances, setbacks, and status.
 5. **Long-running contracts done:** Megacorp Runs recruit connected runners, persist a deadline, and reward or penalize the team based on connection integrity.
 6. **Passive runner collisions done:** connected runners can collide automatically in bounded hacks, races, hunts, and drone incidents shaped by gear, faction, district, and Heat.
-7. Add persistent cyberware scars and accomplishment-generated titles for runner history and flavor.
+7. **Cyberware scars and titles done:** rare passive incidents can leave persistent quirks, while Rep, Heat, and survival milestones award cosmetic titles.
 8. Add a small read-only web status page as the Grid’s observation window; IRC remains the game.

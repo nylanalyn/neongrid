@@ -291,6 +291,9 @@ func TestTypedCityEventEffects(t *testing.T) {
 	if deckRunner.Equipment[SlotDeck].Rating != 2 || !strings.Contains(deckRunner.Equipment[SlotDeck].Name, "leak-overclocked") {
 		t.Fatalf("data leak gear effect = %+v", deckRunner.Equipment[SlotDeck])
 	}
+	if got := cityEventProgressChange(cityEvent{kind: cityEventCorporateSweep, progressChange: -90}, &Player{Scars: []string{ScarCorporateBackdoor}}); got != -120 {
+		t.Fatalf("backdoor sweep change = %d, want -120", got)
+	}
 }
 
 func TestRecentEventsReturnsNewestFirst(t *testing.T) {
@@ -558,7 +561,33 @@ func TestCollisionPowerAndLossUseRunnerBuild(t *testing.T) {
 	if collisionPower(strong) <= collisionPower(weak) {
 		t.Fatalf("strong runner power = %d, weak runner power = %d", collisionPower(strong), collisionPower(weak))
 	}
+	if collisionPower(&Player{Level: 1, Scars: []string{ScarSyntheticAdrenalGland}}) <= collisionPower(weak) {
+		t.Fatal("synthetic adrenal gland did not improve collision power")
+	}
+	if collisionPower(&Player{Level: 1, Scars: []string{ScarBurnedOptic}}) >= collisionPower(weak) {
+		t.Fatal("burned optic did not reduce collision power")
+	}
 	if got := collisionLoss(&Player{Faction: FactionNomad}, 100); got >= 100 {
 		t.Fatalf("nomad collision loss = %d, want mitigation", got)
+	}
+}
+
+func TestScarsAndTitlesAreUniqueAndAccomplishmentBased(t *testing.T) {
+	p := &Player{Level: 5}
+	if !addScar(p, ScarGhostSignal) || addScar(p, ScarGhostSignal) || len(p.Scars) != 1 {
+		t.Fatalf("scar uniqueness failed: %#v", p.Scars)
+	}
+	updateTitles(p)
+	if p.CurrentTitle() != "ICEbreaker" {
+		t.Fatalf("level title = %q, want ICEbreaker", p.CurrentTitle())
+	}
+	p.Heat = 75
+	updateTitles(p)
+	if p.CurrentTitle() != "Corporate Liability" {
+		t.Fatalf("heat title = %q, want Corporate Liability", p.CurrentTitle())
+	}
+	updateTitles(p)
+	if len(p.Titles) != 2 {
+		t.Fatalf("duplicate titles were added: %#v", p.Titles)
 	}
 }

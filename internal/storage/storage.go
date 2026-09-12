@@ -15,7 +15,7 @@ import (
 
 type Store struct{ db *sql.DB }
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
@@ -100,6 +100,10 @@ CREATE TABLE IF NOT EXISTS schema_version (
 			if _, err := tx.Exec("ALTER TABLE players ADD COLUMN next_collision_at INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return err
 			}
+		case 5:
+			if _, err := tx.Exec("ALTER TABLE players ADD COLUMN history_json TEXT NOT NULL DEFAULT '{}'"); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported schema version %d", version)
 		}
@@ -112,7 +116,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 }
 
 func (s *Store) LoadAll() ([]*game.Player, error) {
-	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json FROM players`)
+	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json, history_json FROM players`)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +143,22 @@ func (s *Store) save(exec interface {
 	if err != nil {
 		return err
 	}
+	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles})
+	if err != nil {
+		return err
+	}
 	_, err = exec.Exec(`
-INSERT INTO players(identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO players(identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json, history_json)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(identity) DO UPDATE SET
  account=excluded.account, nick=excluded.nick, guest=excluded.guest, level=excluded.level,
  progress_seconds=excluded.progress_seconds, last_progress_at=excluded.last_progress_at,
  connected=excluded.connected, last_seen_at=excluded.last_seen_at, next_encounter_at=excluded.next_encounter_at, next_collision_at=excluded.next_collision_at,
  district=excluded.district, next_district_at=excluded.next_district_at,
  heat=excluded.heat, last_heat_at=excluded.last_heat_at,
- faction=excluded.faction, equipment_json=excluded.equipment_json`,
+ faction=excluded.faction, equipment_json=excluded.equipment_json, history_json=excluded.history_json`,
 		p.Identity, p.Account, p.Nick, boolInt(p.Guest), p.Level, p.ProgressSeconds,
-		unix(p.LastProgressAt), boolInt(p.Connected), unix(p.LastSeenAt), unix(p.NextEncounterAt), unix(p.NextCollisionAt), p.District, unix(p.NextDistrictAt), p.Heat, unix(p.LastHeatAt), p.Faction, string(equipment))
+		unix(p.LastProgressAt), boolInt(p.Connected), unix(p.LastSeenAt), unix(p.NextEncounterAt), unix(p.NextCollisionAt), p.District, unix(p.NextDistrictAt), p.Heat, unix(p.LastHeatAt), p.Faction, string(equipment), string(history))
 	return err
 }
 
@@ -208,7 +216,7 @@ func (s *Store) MigrateGuest(guestKey, accountKey, account, nick string) (*game.
 }
 
 func (s *Store) Top(limit int) ([]*game.Player, error) {
-	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json FROM players ORDER BY level DESC, progress_seconds DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json, history_json FROM players ORDER BY level DESC, progress_seconds DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -291,13 +299,18 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 
 type scanner interface{ Scan(...any) error }
 
+type playerHistory struct {
+	Scars  []string `json:"scars"`
+	Titles []string `json:"titles"`
+}
+
 func scanPlayer(row scanner) (*game.Player, error) {
 	var p game.Player
 	var guest, connected int
 	var lastProgress, lastSeen, nextEncounter, nextCollision, nextDistrict, lastHeat int64
 	var heat int
-	var equipment string
-	if err := row.Scan(&p.Identity, &p.Account, &p.Nick, &guest, &p.Level, &p.ProgressSeconds, &lastProgress, &connected, &lastSeen, &nextEncounter, &nextCollision, &p.District, &nextDistrict, &heat, &lastHeat, &p.Faction, &equipment); err != nil {
+	var equipment, history string
+	if err := row.Scan(&p.Identity, &p.Account, &p.Nick, &guest, &p.Level, &p.ProgressSeconds, &lastProgress, &connected, &lastSeen, &nextEncounter, &nextCollision, &p.District, &nextDistrict, &heat, &lastHeat, &p.Faction, &equipment, &history); err != nil {
 		return nil, err
 	}
 	p.Guest, p.Connected = guest != 0, connected != 0
@@ -312,11 +325,19 @@ func scanPlayer(row scanner) (*game.Player, error) {
 	if p.Equipment == nil {
 		p.Equipment = map[string]game.Item{}
 	}
+	if history == "" {
+		history = "{}"
+	}
+	var savedHistory playerHistory
+	if err := json.Unmarshal([]byte(history), &savedHistory); err != nil {
+		return nil, err
+	}
+	p.Scars, p.Titles = savedHistory.Scars, savedHistory.Titles
 	return &p, nil
 }
 
 func loadByKey(tx *sql.Tx, key string) (*game.Player, error) {
-	row := tx.QueryRow(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json FROM players WHERE identity = ?`, key)
+	row := tx.QueryRow(`SELECT identity, account, nick, guest, level, progress_seconds, last_progress_at, connected, last_seen_at, next_encounter_at, next_collision_at, district, next_district_at, heat, last_heat_at, faction, equipment_json, history_json FROM players WHERE identity = ?`, key)
 	p, err := scanPlayer(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -349,7 +370,25 @@ func merge(guest, account *game.Player) *game.Player {
 			result.Equipment[slot] = item
 		}
 	}
+	result.Scars = appendUnique(result.Scars, guest.Scars...)
+	result.Titles = appendUnique(result.Titles, guest.Titles...)
 	return result
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, value := range values {
+			if value == addition {
+				found = true
+				break
+			}
+		}
+		if !found && addition != "" {
+			values = append(values, addition)
+		}
+	}
+	return values
 }
 
 func clone(p *game.Player) *game.Player {

@@ -51,6 +51,8 @@ Megacorp Runs can recruit up to `events.contract_participants` currently connect
 
 Connected runners may also collide automatically in passive deck hacks, dead-drop races, hunts, and drone incidents. Gear rating, faction, district, and Heat shape the outcome; both runners receive a cooldown so the channel does not become a combat log.
 
+Rare incidents can leave persistent cyberware scars such as `Ghost Signal`, `Burned Optic`, or `Synthetic Adrenal Gland`; some help and some hurt. Titles such as `ICEbreaker`, `Corporate Liability`, and `Ghost of Floodline` are awarded automatically from runner milestones and appear in `!status` and `!top`.
+
 Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval, while `events.collision_minutes` controls the minimum time between passive runner collisions.
 
 ## Configuration

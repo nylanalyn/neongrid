@@ -339,7 +339,11 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 			return
 		}
 		for i, p := range players {
-			client.Cmd.Message(target, fmt.Sprintf("[GRID] #%d %s — Rep %d", i+1, p.Nick, p.Level))
+			title := p.CurrentTitle()
+			if title == "" {
+				title = "unranked"
+			}
+			client.Cmd.Message(target, fmt.Sprintf("[GRID] #%d %s — Rep %d | %s", i+1, p.Nick, p.Level, title))
 		}
 	case "gear":
 		p, err := b.game.Status(identity, e.Source.Name, now)
@@ -440,7 +444,15 @@ func statusLine(p *game.Player, rules game.Rules) string {
 	if faction == "" {
 		faction = "unaffiliated"
 	}
-	return fmt.Sprintf("[GRID] %s | Rep %d | district %s | heat %d/%d | next %s | rating %d | faction %s | id %s", p.Nick, p.Level, p.District, p.Heat, game.MaxHeat, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, identity)
+	title := p.CurrentTitle()
+	if title == "" {
+		title = "unranked"
+	}
+	scars := strings.Join(p.Scars, ", ")
+	if scars == "" {
+		scars = "none"
+	}
+	return fmt.Sprintf("[GRID] %s | Rep %d | district %s | heat %d/%d | next %s | rating %d | faction %s | title %s | scars %s | id %s", p.Nick, p.Level, p.District, p.Heat, game.MaxHeat, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, title, scars, identity)
 }
 
 func gearLine(p *game.Player) string {

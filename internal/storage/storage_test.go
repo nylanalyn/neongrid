@@ -22,6 +22,7 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 		ProgressSeconds: 12, LastProgressAt: now, LastSeenAt: now, Connected: true,
 		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour), NextCollisionAt: now.Add(2 * time.Hour),
 		Heat: 42, LastHeatAt: now,
+		Scars: []string{game.ScarBurnedOptic}, Titles: []string{"ICEbreaker"},
 		Equipment: map[string]game.Item{game.SlotWeaponRig: {Name: "Mono-edge Mk 1", Rating: 1, Unique: true}},
 	}
 	if err := store.Save(guest); err != nil {
@@ -45,6 +46,9 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	}
 	if !loaded[0].NextCollisionAt.Equal(now.Add(2 * time.Hour)) {
 		t.Fatalf("collision deadline did not round-trip: %+v", loaded[0])
+	}
+	if len(loaded[0].Scars) != 1 || loaded[0].Scars[0] != game.ScarBurnedOptic || loaded[0].CurrentTitle() != "ICEbreaker" {
+		t.Fatalf("runner history did not round-trip: %+v", loaded[0])
 	}
 
 	bound, err := store.MigrateGuest(game.GuestKey("runner"), game.AccountKey("nylan"), "nylan", "runner")
@@ -153,6 +157,13 @@ INSERT INTO players(identity, nick) VALUES('acct:test', 'runner');`)
 	}
 	if nextCollision != 0 {
 		t.Fatalf("migrated collision deadline = %d, want 0", nextCollision)
+	}
+	var history string
+	if err := store.db.QueryRow("SELECT history_json FROM players WHERE identity = ?", "acct:test").Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if history != "{}" {
+		t.Fatalf("migrated history = %q, want empty object", history)
 	}
 }
 

@@ -39,6 +39,13 @@ const (
 )
 
 const (
+	ScarBurnedOptic           = "Burned Optic"
+	ScarGhostSignal           = "Ghost Signal"
+	ScarCorporateBackdoor     = "Corporate Backdoor"
+	ScarSyntheticAdrenalGland = "Synthetic Adrenal Gland"
+)
+
+const (
 	DistrictNeonMarket        = "Neon Market"
 	DistrictFloodline         = "Floodline"
 	DistrictCorporateArcology = "Corporate Arcology"
@@ -86,6 +93,8 @@ type Player struct {
 	LastHeatAt      time.Time
 	Faction         string
 	Equipment       map[string]Item
+	Scars           []string
+	Titles          []string
 }
 
 type WorldState struct {
@@ -737,6 +746,7 @@ func (e *Engine) advanceLocked(p *Player, now time.Time) {
 			p.Equipment[slot] = Item{Name: equipmentName(slot, tier), Rating: tier}
 		}
 	}
+	updateTitles(p)
 }
 
 type rareItem struct {
@@ -757,6 +767,12 @@ const rareLootChancePercent = 5
 
 func (e *Engine) encounterLocked(p *Player) (string, error) {
 	rating := p.Level + p.EquipmentRating()
+	if hasScar(p, ScarGhostSignal) {
+		rating++
+	}
+	if hasScar(p, ScarBurnedOptic) {
+		rating--
+	}
 	if p.Faction == FactionGhostline {
 		rating += 2
 	}
@@ -770,14 +786,18 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 		}
 		p.ProgressSeconds += gain
 		p.Heat = addHeat(p.Heat, 2)
+		scar := ""
+		if e.rng.Intn(25) == 0 && addScar(p, ScarGhostSignal) {
+			scar = " Ghost Signal acquired."
+		}
 		item, err := e.rareLootLocked(p)
 		if err != nil {
 			return "", err
 		}
 		if item != nil {
-			return fmt.Sprintf("[GRID] %s survived an ICE breach and recovered UNIQUE %s.", p.Nick, item.Name), nil
+			return fmt.Sprintf("[GRID] %s survived an ICE breach and recovered UNIQUE %s.%s", p.Nick, item.Name, scar), nil
 		}
-		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.", p.Nick), nil
+		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.%s", p.Nick, scar), nil
 	}
 	loss := max64(5, e.rules.LevelDuration(p.Level)/30)
 	if p.Faction == FactionNomad {
@@ -788,7 +808,11 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 	}
 	p.ProgressSeconds -= loss
 	p.Heat = addHeat(p.Heat, 8)
-	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick), nil
+	scar := ""
+	if e.rng.Intn(12) == 0 && addScar(p, ScarBurnedOptic) {
+		scar = " Burned Optic acquired."
+	}
+	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.%s", p.Nick, scar), nil
 }
 
 func (e *Engine) collisionLocked(now time.Time) (string, error) {
@@ -821,20 +845,24 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 	loss := collisionLoss(loser, max64(20, e.rules.LevelDuration(loser.Level)/24))
 	winner.Heat = addHeat(winner.Heat, 3)
 	loser.Heat = addHeat(loser.Heat, 5)
+	scar := ""
+	if e.rng.Intn(20) == 0 && addScar(winner, ScarSyntheticAdrenalGland) {
+		scar = " Synthetic Adrenal Gland acquired."
+	}
 	message := ""
 	switch e.rng.Intn(4) {
 	case 0:
 		winner.ProgressSeconds += gain
 		loser.ProgressSeconds -= loss
-		message = fmt.Sprintf("[GRID] COLLISION: %s cracked %s's deck and siphoned %s.", winner.Nick, loser.Nick, formatDuration(time.Duration(gain)*time.Second))
+		message = fmt.Sprintf("[GRID] COLLISION: %s cracked %s's deck and siphoned %s.%s", winner.Nick, loser.Nick, formatDuration(time.Duration(gain)*time.Second), scar)
 	case 1:
 		winner.ProgressSeconds += gain * 2
 		loser.ProgressSeconds -= max64(15, loss/2)
-		message = fmt.Sprintf("[GRID] COLLISION: %s won a dead-drop race against %s.", winner.Nick, loser.Nick)
+		message = fmt.Sprintf("[GRID] COLLISION: %s won a dead-drop race against %s.%s", winner.Nick, loser.Nick, scar)
 	case 2:
 		winner.ProgressSeconds += max64(15, gain/2)
 		loser.ProgressSeconds -= loss * 2
-		message = fmt.Sprintf("[GRID] COLLISION: %s hunted %s through the %s.", winner.Nick, loser.Nick, loser.District)
+		message = fmt.Sprintf("[GRID] COLLISION: %s hunted %s through the %s.%s", winner.Nick, loser.Nick, loser.District, scar)
 	case 3:
 		winner.ProgressSeconds += gain
 		loser.ProgressSeconds -= loss
@@ -845,8 +873,10 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 			}
 			loser.Equipment[SlotDrone] = item
 		}
-		message = fmt.Sprintf("[GRID] COLLISION: %s jammed %s's drone feed and took the shard.", winner.Nick, loser.Nick)
+		message = fmt.Sprintf("[GRID] COLLISION: %s jammed %s's drone feed and took the shard.%s", winner.Nick, loser.Nick, scar)
 	}
+	updateTitles(winner)
+	updateTitles(loser)
 	winner.NextCollisionAt = now.Add(e.rules.CollisionInterval)
 	loser.NextCollisionAt = now.Add(e.rules.CollisionInterval)
 	if err := e.repo.Save(winner); err != nil {
@@ -860,6 +890,12 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 
 func collisionPower(p *Player) int {
 	power := p.Level + p.EquipmentRating() + p.Heat/25
+	if hasScar(p, ScarSyntheticAdrenalGland) {
+		power += 2
+	}
+	if hasScar(p, ScarBurnedOptic) {
+		power--
+	}
 	switch p.Faction {
 	case FactionGhostline:
 		power += 2
@@ -906,6 +942,55 @@ func (e *Engine) rareLootLocked(p *Player) (*Item, error) {
 
 func rareLootChance(p *Player) int {
 	return min(100, rareLootChancePercent+p.Heat/10)
+}
+
+func addScar(p *Player, scar string) bool {
+	if hasScar(p, scar) {
+		return false
+	}
+	p.Scars = append(p.Scars, scar)
+	return true
+}
+
+func hasScar(p *Player, scar string) bool {
+	for _, existing := range p.Scars {
+		if existing == scar {
+			return true
+		}
+	}
+	return false
+}
+
+func addTitle(p *Player, title string) bool {
+	for _, existing := range p.Titles {
+		if existing == title {
+			return false
+		}
+	}
+	p.Titles = append(p.Titles, title)
+	return true
+}
+
+func updateTitles(p *Player) {
+	if p.Level >= 5 {
+		addTitle(p, "ICEbreaker")
+	}
+	if p.Level >= 10 {
+		addTitle(p, "Nine-Day Signal")
+	}
+	if p.Heat >= 75 {
+		addTitle(p, "Corporate Liability")
+	}
+	if p.District == DistrictFloodline && p.Level >= 3 {
+		addTitle(p, "Ghost of Floodline")
+	}
+}
+
+func (p *Player) CurrentTitle() string {
+	if len(p.Titles) == 0 {
+		return ""
+	}
+	return p.Titles[len(p.Titles)-1]
 }
 
 func (e *Engine) randomDistrictLocked(current string) string {
@@ -998,6 +1083,7 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 			return message, nil
 		}
 	}
+	var scarMessages []string
 	for _, p := range e.users {
 		if !p.Connected {
 			continue
@@ -1006,6 +1092,9 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 		p.ProgressSeconds += cityEventProgressChange(event, p)
 		if event.kind == cityEventCorporateSweep {
 			p.Heat = addHeat(p.Heat, 10)
+			if e.rng.Intn(20) == 0 && addScar(p, ScarCorporateBackdoor) {
+				scarMessages = append(scarMessages, fmt.Sprintf("%s acquired %s", p.Nick, ScarCorporateBackdoor))
+			}
 		}
 		applyCityEventGear(event, p)
 		if event.kind == cityEventDataLeak {
@@ -1015,11 +1104,16 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 				p.NextEncounterAt = nextEncounter
 			}
 		}
+		updateTitles(p)
 		if err := e.repo.Save(p); err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", event.text, formatProgressChange(event.progressChange)), nil
+	message := fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", event.text, formatProgressChange(event.progressChange))
+	if len(scarMessages) > 0 {
+		message += " " + strings.Join(scarMessages, "; ") + "."
+	}
+	return message, nil
 }
 
 func (e *Engine) startContractLocked(now time.Time) (string, bool, error) {
@@ -1130,6 +1224,9 @@ func cityEventProgressChange(event cityEvent, p *Player) int64 {
 		if p.District == DistrictCorporateArcology {
 			change -= 30
 		}
+		if hasScar(p, ScarCorporateBackdoor) {
+			change -= 30
+		}
 	case cityEventDataLeak:
 		if p.District == DistrictFloodline {
 			change += 60
@@ -1217,6 +1314,8 @@ func clonePlayer(p *Player) *Player {
 	for slot, item := range p.Equipment {
 		copy.Equipment[slot] = item
 	}
+	copy.Scars = append([]string(nil), p.Scars...)
+	copy.Titles = append([]string(nil), p.Titles...)
 	return &copy
 }
 
