@@ -238,6 +238,12 @@ func (s *Store) LoadWorldState() (game.WorldState, error) {
 			}
 			continue
 		}
+		if key == "active_contract" {
+			if err := json.Unmarshal([]byte(value), &state.Contract); err != nil {
+				return state, fmt.Errorf("world state %s: %w", key, err)
+			}
+			continue
+		}
 		seconds, err := parseUnix(value)
 		if err != nil {
 			return state, fmt.Errorf("world state %s: %w", key, err)
@@ -257,6 +263,10 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 	if err != nil {
 		return err
 	}
+	contract, err := json.Marshal(state.Contract)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -266,6 +276,7 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 		"pirate_until":       fmt.Sprint(unix(state.PirateUntil)),
 		"next_city_event_at": fmt.Sprint(unix(state.NextCityEventAt)),
 		"recent_events":      string(recentEvents),
+		"active_contract":    string(contract),
 	} {
 		if _, err := tx.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 			return err

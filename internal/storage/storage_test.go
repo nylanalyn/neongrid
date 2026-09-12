@@ -68,6 +68,10 @@ func TestWorldEventHistoryRoundTrip(t *testing.T) {
 		PirateUntil:     time.Unix(1000, 0),
 		NextCityEventAt: time.Unix(1100, 0),
 		RecentEvents:    []string{"[GRID] DATA LEAK", "[GRID] PIRATE FREQUENCY"},
+		Contract: &game.Contract{
+			Title: "Helix Dynamics breach", District: game.DistrictCorporateArcology,
+			Participants: []string{"acct:alpha", "acct:beta"}, EndsAt: time.Unix(1200, 0),
+		},
 	}
 	if err := store.SaveWorldState(want); err != nil {
 		t.Fatal(err)
@@ -78,6 +82,9 @@ func TestWorldEventHistoryRoundTrip(t *testing.T) {
 	}
 	if got.PirateUntil != want.PirateUntil || got.NextCityEventAt != want.NextCityEventAt || len(got.RecentEvents) != 2 || got.RecentEvents[0] != want.RecentEvents[0] {
 		t.Fatalf("world = %#v, want %#v", got, want)
+	}
+	if got.Contract == nil || got.Contract.Title != want.Contract.Title || got.Contract.District != want.Contract.District || len(got.Contract.Participants) != 2 || !got.Contract.EndsAt.Equal(want.Contract.EndsAt) {
+		t.Fatalf("contract = %#v, want %#v", got.Contract, want.Contract)
 	}
 }
 

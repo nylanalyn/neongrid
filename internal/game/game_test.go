@@ -69,6 +69,7 @@ func testRules() Rules {
 		ActionBaseSeconds: 30, ActionPerLevelSeconds: 5, ActionPerCharacterSeconds: 1,
 		NickPenaltySeconds: 40, PartPenaltySeconds: 50, QuitPenaltySeconds: 60, KickPenaltySeconds: 70,
 		EncounterInterval: time.Hour, CityEventInterval: time.Hour, DistrictInterval: time.Hour, PirateDuration: time.Minute,
+		ContractDuration: time.Hour, ContractMaxParticipants: 2,
 		GuestRetention: 24 * time.Hour,
 	}
 }
@@ -438,5 +439,61 @@ func TestKickRaisesHeatAndHeatShapesLootChance(t *testing.T) {
 	}
 	if rareLootChance(&Player{Heat: MaxHeat}) <= rareLootChance(&Player{}) {
 		t.Fatal("high heat did not improve rare-loot odds")
+	}
+}
+
+func TestContractCompletesForConnectedTeam(t *testing.T) {
+	now := time.Unix(13000, 0)
+	rules := testRules()
+	rules.ContractDuration = time.Hour
+	rules.EncounterInterval = 24 * time.Hour
+	rules.CityEventInterval = 24 * time.Hour
+	rules.DistrictInterval = 24 * time.Hour
+	e, err := New(newMemoryRepo(), rules, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "alpha", "acct-alpha", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "beta", "acct-beta", now); err != nil {
+		t.Fatal(err)
+	}
+	contractMessage, started, err := e.startContractLocked(now)
+	if err != nil || !started || !strings.Contains(contractMessage, "CONTRACT:") {
+		t.Fatalf("contract start = %q, %v, %v", contractMessage, started, err)
+	}
+	if len(e.world.Contract.Participants) != 2 {
+		t.Fatalf("contract team = %#v", e.world.Contract.Participants)
+	}
+	message, err := e.resolveContractLocked(now.Add(time.Hour + time.Minute))
+	if err != nil || !strings.Contains(message, "CONTRACT COMPLETE") || e.world.Contract != nil {
+		t.Fatalf("contract completion = %q, %v, %#v", message, err, e.world.Contract)
+	}
+}
+
+func TestContractFailsWhenRunnerDisconnects(t *testing.T) {
+	now := time.Unix(14000, 0)
+	rules := testRules()
+	rules.ContractDuration = time.Hour
+	e, err := New(newMemoryRepo(), rules, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "runner", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, started, err := e.startContractLocked(now); err != nil || !started {
+		t.Fatalf("contract did not start: %v", err)
+	}
+	if _, err = e.Disconnect("runner", ActivityPart, now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if e.world.Contract == nil || !e.world.Contract.Failed {
+		t.Fatalf("disconnect did not fail contract: %#v", e.world.Contract)
+	}
+	message, err := e.resolveContractLocked(now.Add(2 * time.Hour))
+	if err != nil || !strings.Contains(message, "CONTRACT FAILED") || e.world.Contract != nil {
+		t.Fatalf("contract failure = %q, %v, %#v", message, err, e.world.Contract)
 	}
 }

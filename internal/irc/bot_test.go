@@ -75,6 +75,9 @@ func TestWorldLineShowsPirateWindowOrNextEvent(t *testing.T) {
 	if got := worldLine(game.WorldState{NextCityEventAt: now.Add(2 * time.Minute)}, now); got != "[GRID] pirate frequency dormant | next city event in 2m0s" {
 		t.Fatalf("dormant worldLine() = %q", got)
 	}
+	if got := worldLine(game.WorldState{Contract: &game.Contract{Title: "Helix Dynamics breach", District: game.DistrictCorporateArcology, EndsAt: now.Add(3 * time.Hour)}}, now); got != "[GRID] contract active: Helix Dynamics breach in Corporate Arcology; 3h0m0s remaining." {
+		t.Fatalf("contract worldLine() = %q", got)
+	}
 }
 
 func TestTLSModes(t *testing.T) {

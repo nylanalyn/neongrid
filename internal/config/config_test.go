@@ -9,6 +9,8 @@ func TestTLS12OnlyEnvironmentOverride(t *testing.T) {
 	t.Setenv("NEONGRID_TLS12_ONLY", "true")
 	t.Setenv("NEONGRID_EVENTS_DISTRICT_HOURS", "8")
 	t.Setenv("NEONGRID_EVENTS_HEAT_DECAY_MINUTES", "12")
+	t.Setenv("NEONGRID_EVENTS_CONTRACT_HOURS", "6")
+	t.Setenv("NEONGRID_EVENTS_CONTRACT_PARTICIPANTS", "3")
 	cfg := Defaults()
 	if err := applyEnv(&cfg); err != nil {
 		t.Fatal(err)
@@ -21,5 +23,11 @@ func TestTLS12OnlyEnvironmentOverride(t *testing.T) {
 	}
 	if got := cfg.Rules().HeatDecayInterval; got != 12*time.Minute {
 		t.Fatalf("heat decay interval = %s, want 12m", got)
+	}
+	if got := cfg.Rules().ContractDuration; got != 6*time.Hour {
+		t.Fatalf("contract duration = %s, want 6h", got)
+	}
+	if got := cfg.Rules().ContractMaxParticipants; got != 3 {
+		t.Fatalf("contract participants = %d, want 3", got)
 	}
 }

@@ -374,6 +374,7 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] NeonGrid is an idle-RPG: stay linked to gain Rep. In %s, speech, /me, nick changes, PART, QUIT, and KICK add delay to your next Rep. Other channels are clean.", b.cfg.Channel))
 		client.Cmd.Message(target, "[GRID] Zero-penalty commands: !help !status/!runner !top !gear !world !events. Pirate frequency can temporarily make game-channel chatter safe.")
 		client.Cmd.Message(target, "[GRID] Lock in one faction with !faction <name>: ghostline = better ICE odds; chrome = bigger shard gains; nomad = softer ICE losses.")
+		client.Cmd.Message(target, "[GRID] Megacorp Runs may recruit linked runners; !world shows the active contract and deadline.")
 	case "pirate":
 		if !b.isAdmin(account) {
 			client.Cmd.Message(target, "[GRID] admin clearance required.")
@@ -461,6 +462,17 @@ func gearLine(p *game.Player) string {
 }
 
 func worldLine(world game.WorldState, now time.Time) string {
+	if world.Contract != nil {
+		remaining := world.Contract.EndsAt.Sub(now)
+		if remaining < 0 {
+			remaining = 0
+		}
+		line := fmt.Sprintf("[GRID] contract active: %s in %s; %s remaining.", world.Contract.Title, world.Contract.District, formatPenalty(int64(remaining/time.Second)))
+		if world.PirateUntil.After(now) {
+			line += " Pirate frequency active; transmissions safe."
+		}
+		return line
+	}
 	if world.PirateUntil.After(now) {
 		return "[GRID] pirate frequency active for " + formatPenalty(int64(world.PirateUntil.Sub(now)/time.Second)) + "; transmissions safe."
 	}

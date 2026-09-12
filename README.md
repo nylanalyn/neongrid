@@ -47,6 +47,8 @@ Successful passive ICE encounters have a small chance to recover a named artifac
 
 Heat rises when runners broadcast identity changes, get disconnected, lose ICE, or attract corporate attention; it decays while connected according to `events.heat_decay_minutes`.
 
+Megacorp Runs can recruit up to `events.contract_participants` currently connected runners for `events.contract_hours`. Every recruited runner must remain linked until the deadline; a disconnect fails the whole contract and the team takes a setback. Check `!world` for the active contract.
+
 Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval.
 
 ## Configuration

@@ -91,6 +91,15 @@ type WorldState struct {
 	PirateUntil     time.Time
 	NextCityEventAt time.Time
 	RecentEvents    []string
+	Contract        *Contract
+}
+
+type Contract struct {
+	Title        string
+	District     string
+	Participants []string
+	EndsAt       time.Time
+	Failed       bool
 }
 
 type cityEventKind string
@@ -137,6 +146,8 @@ type Rules struct {
 	CityEventInterval         time.Duration
 	DistrictInterval          time.Duration
 	HeatDecayInterval         time.Duration
+	ContractDuration          time.Duration
+	ContractMaxParticipants   int
 	PirateDuration            time.Duration
 	GuestRetention            time.Duration
 }
@@ -182,6 +193,12 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 	}
 	if rules.HeatDecayInterval < time.Second {
 		rules.HeatDecayInterval = 30 * time.Minute
+	}
+	if rules.ContractDuration < time.Minute {
+		rules.ContractDuration = 8 * time.Hour
+	}
+	if rules.ContractMaxParticipants < 1 {
+		rules.ContractMaxParticipants = 4
 	}
 	if rules.PirateDuration < time.Second {
 		rules.PirateDuration = 5 * time.Minute
@@ -249,8 +266,10 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 		identity = AccountKey(account)
 	}
 	p := e.users[identity]
+	contractChanged := false
 	if !guest {
 		if guestPlayer := e.users[GuestKey(nick)]; guestPlayer != nil {
+			guestKey := guestPlayer.Identity
 			e.advanceLocked(guestPlayer, now)
 			migrated, err := e.repo.MigrateGuest(guestPlayer.Identity, identity, account, nick)
 			if err != nil {
@@ -259,6 +278,7 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 			delete(e.users, guestPlayer.Identity)
 			p = migrated
 			e.users[identity] = p
+			contractChanged = e.rekeyContractParticipantLocked(guestKey, identity)
 		}
 	}
 	if p == nil {
@@ -280,6 +300,11 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 	if err := e.repo.Save(p); err != nil {
 		return nil, err
 	}
+	if contractChanged {
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return nil, err
+		}
+	}
 	return clonePlayer(p), nil
 }
 
@@ -294,14 +319,17 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 		guest = e.findLocked("", nick)
 	}
 	identity := AccountKey(account)
+	contractChanged := false
 	if guest != nil && guest.Guest {
+		guestKey := guest.Identity
 		e.advanceLocked(guest, now)
-		migrated, err := e.repo.MigrateGuest(guest.Identity, identity, account, nick)
+		migrated, err := e.repo.MigrateGuest(guestKey, identity, account, nick)
 		if err != nil {
 			return nil, err
 		}
-		delete(e.users, guest.Identity)
+		delete(e.users, guestKey)
 		e.users[identity] = migrated
+		contractChanged = e.rekeyContractParticipantLocked(guestKey, identity)
 		guest = migrated
 	}
 	if guest == nil {
@@ -319,6 +347,11 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 	e.users[identity] = guest
 	if err := e.repo.Save(guest); err != nil {
 		return nil, err
+	}
+	if contractChanged {
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return nil, err
+		}
 	}
 	return clonePlayer(guest), nil
 }
@@ -387,8 +420,14 @@ func (e *Engine) Disconnect(nick string, kind Activity, now time.Time) (int64, e
 	p.LastSeenAt = now
 	p.LastProgressAt = now
 	p.LastHeatAt = now
+	contractChanged := e.markContractFailedLocked(p.Identity)
 	if err := e.repo.Save(p); err != nil {
 		return 0, err
+	}
+	if contractChanged {
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return 0, err
+		}
 	}
 	return penalty, nil
 }
@@ -396,6 +435,7 @@ func (e *Engine) Disconnect(nick string, kind Activity, now time.Time) (int64, e
 func (e *Engine) DisconnectAll(now time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	contractChanged := false
 	for _, p := range e.users {
 		if !p.Connected {
 			continue
@@ -404,7 +444,13 @@ func (e *Engine) DisconnectAll(now time.Time) error {
 		p.Connected = false
 		p.LastProgressAt = now
 		p.LastHeatAt = now
+		contractChanged = e.markContractFailedLocked(p.Identity) || contractChanged
 		if err := e.repo.Save(p); err != nil {
+			return err
+		}
+	}
+	if contractChanged {
+		if err := e.repo.SaveWorldState(e.world); err != nil {
 			return err
 		}
 	}
@@ -430,9 +476,11 @@ func (e *Engine) Rename(oldNick, newNick string, now time.Time) (int64, error) {
 	p.ProgressSeconds -= penalty
 	p.Heat = addHeat(p.Heat, 4)
 	p.Nick = newNick
+	contractChanged := false
 	if p.Guest {
 		p.Identity = newKey
 		delete(e.users, oldKey)
+		contractChanged = e.rekeyContractParticipantLocked(oldKey, newKey)
 		if err := e.repo.Delete(oldKey); err != nil {
 			return 0, err
 		}
@@ -440,6 +488,11 @@ func (e *Engine) Rename(oldNick, newNick string, now time.Time) (int64, error) {
 	e.users[p.Identity] = p
 	if err := e.repo.Save(p); err != nil {
 		return 0, err
+	}
+	if contractChanged {
+		if err := e.repo.SaveWorldState(e.world); err != nil {
+			return 0, err
+		}
 	}
 	return penalty, nil
 }
@@ -479,6 +532,11 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var messages []string
+	if message, err := e.resolveContractLocked(now); err != nil {
+		return nil, err
+	} else if message != "" {
+		messages = append(messages, message)
+	}
 	if !e.world.NextCityEventAt.IsZero() && !now.Before(e.world.NextCityEventAt) {
 		message, err := e.cityEventLocked(now)
 		if err != nil {
@@ -828,6 +886,13 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 		return fmt.Sprintf("[GRID] PIRATE FREQUENCY: for %s, channel transmissions are safe.", formatDuration(e.rules.PirateDuration)), nil
 	}
 	event := cityEvents[e.rng.Intn(len(cityEvents))]
+	if event.kind == cityEventMegacorpRun {
+		if message, started, err := e.startContractLocked(now); err != nil {
+			return "", err
+		} else if started {
+			return message, nil
+		}
+	}
 	for _, p := range e.users {
 		if !p.Connected {
 			continue
@@ -850,6 +915,100 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 		}
 	}
 	return fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", event.text, formatProgressChange(event.progressChange)), nil
+}
+
+func (e *Engine) startContractLocked(now time.Time) (string, bool, error) {
+	if e.world.Contract != nil {
+		return "", false, nil
+	}
+	var candidates []*Player
+	for _, p := range e.users {
+		if p.Connected {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", false, nil
+	}
+	order := e.rng.Perm(len(candidates))
+	count := min(len(candidates), e.rules.ContractMaxParticipants)
+	contract := &Contract{
+		Title:    "Helix Dynamics breach",
+		District: districts[e.rng.Intn(len(districts))],
+		EndsAt:   now.Add(e.rules.ContractDuration),
+	}
+	nicks := make([]string, 0, count)
+	for _, index := range order[:count] {
+		p := candidates[index]
+		contract.Participants = append(contract.Participants, p.Identity)
+		nicks = append(nicks, p.Nick)
+	}
+	e.world.Contract = contract
+	return fmt.Sprintf("[GRID] CONTRACT: %s in %s. Stay linked for %s. Team: %s.", contract.Title, contract.District, formatDuration(e.rules.ContractDuration), strings.Join(nicks, ", ")), true, nil
+}
+
+func (e *Engine) resolveContractLocked(now time.Time) (string, error) {
+	contract := e.world.Contract
+	if contract == nil || now.Before(contract.EndsAt) {
+		return "", nil
+	}
+	success := !contract.Failed
+	for _, identity := range contract.Participants {
+		p := e.users[identity]
+		if p == nil || !p.Connected {
+			success = false
+			break
+		}
+	}
+	for _, identity := range contract.Participants {
+		p := e.users[identity]
+		if p == nil {
+			continue
+		}
+		e.advanceLocked(p, now)
+		if success {
+			p.ProgressSeconds += max64(60, e.rules.LevelDuration(p.Level)/6)
+			p.Heat = addHeat(p.Heat, 3)
+		} else {
+			p.ProgressSeconds -= max64(120, e.rules.LevelDuration(p.Level)/4)
+			p.Heat = addHeat(p.Heat, 10)
+		}
+		if err := e.repo.Save(p); err != nil {
+			return "", err
+		}
+	}
+	e.world.Contract = nil
+	if success {
+		return fmt.Sprintf("[GRID] CONTRACT COMPLETE: %s cleared. The team secured its payout.", contract.Title), nil
+	}
+	return fmt.Sprintf("[GRID] CONTRACT FAILED: %s collapsed after a team signal dropped. The breach cost the team time.", contract.Title), nil
+}
+
+func (e *Engine) markContractFailedLocked(identity string) bool {
+	if e.world.Contract == nil || e.world.Contract.Failed {
+		return false
+	}
+	for _, participant := range e.world.Contract.Participants {
+		if participant == identity {
+			e.world.Contract.Failed = true
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) rekeyContractParticipantLocked(oldIdentity, newIdentity string) bool {
+	if e.world.Contract == nil || oldIdentity == newIdentity {
+		return false
+	}
+	changed := false
+	for index, participant := range e.world.Contract.Participants {
+		if participant == oldIdentity {
+			e.world.Contract.Participants[index] = newIdentity
+			changed = true
+		}
+	}
+	return changed
 }
 
 func cityEventProgressChange(event cityEvent, p *Player) int64 {
