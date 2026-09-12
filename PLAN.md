@@ -37,3 +37,14 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 ## Future problems
 
 - Add an explicit faction respec/reset path, likely admin-controlled or tied to a future season. Faction choice remains permanent for now.
+
+## Post-MVP roadmap
+
+1. Add named districts with automatic runner movement, then make event and encounter effects district-aware.
+2. Evolve city events into richer typed effects that can influence gear, districts, factions, runners, encounters, and communication rules.
+3. Add rare named loot alongside ordinary Mk equipment, with uniqueness enforced by persistence.
+4. Add Heat as a slowly decaying personal risk/reward signal that shapes encounters and status.
+5. Add long-running contracts involving randomly selected runners and meaningful connection stakes.
+6. Add automatic runner-versus-runner collisions with bounded, fair passive outcomes and no grind commands.
+7. Add persistent cyberware scars and accomplishment-generated titles for runner history and flavor.
+8. Add a small read-only web status page as the Grid’s observation window; IRC remains the game.
