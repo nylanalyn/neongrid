@@ -64,6 +64,7 @@ type EventConfig struct {
 	HeatDecayMinutes     int `yaml:"heat_decay_minutes"`
 	ContractHours        int `yaml:"contract_hours"`
 	ContractParticipants int `yaml:"contract_participants"`
+	CollisionMinutes     int `yaml:"collision_minutes"`
 }
 
 func Defaults() Config {
@@ -78,7 +79,7 @@ func Defaults() Config {
 			ActionBaseSeconds: 45, ActionPerLevelSeconds: 7, ActionPerCharacterSeconds: 1,
 			NickSeconds: 90, PartSeconds: 180, QuitSeconds: 240, KickSeconds: 360,
 		},
-		Events:             EventConfig{TickSeconds: 30, EncounterMinutes: 60, CityEventMinutes: 120, PirateMinutes: 5, DistrictHours: 6, HeatDecayMinutes: 30, ContractHours: 8, ContractParticipants: 4},
+		Events:             EventConfig{TickSeconds: 30, EncounterMinutes: 60, CityEventMinutes: 120, PirateMinutes: 5, DistrictHours: 6, HeatDecayMinutes: 30, ContractHours: 8, ContractParticipants: 4, CollisionMinutes: 90},
 		GuestRetentionDays: 14, ReconnectSeconds: 10,
 	}
 }
@@ -142,6 +143,7 @@ func (c Config) Rules() game.Rules {
 		HeatDecayInterval:         durationMinutes(c.Events.HeatDecayMinutes, 30),
 		ContractDuration:          time.Duration(maxInt(c.Events.ContractHours, 8)) * time.Hour,
 		ContractMaxParticipants:   maxInt(c.Events.ContractParticipants, 4),
+		CollisionInterval:         durationMinutes(c.Events.CollisionMinutes, 90),
 		PirateDuration:            durationMinutes(c.Events.PirateMinutes, 5),
 		GuestRetention:            durationDays(c.GuestRetentionDays, 14),
 	}
@@ -262,7 +264,10 @@ func applyEnv(c *Config) error {
 	if err := intEnv("NEONGRID_EVENTS_CONTRACT_HOURS", &c.Events.ContractHours); err != nil {
 		return err
 	}
-	return intEnv("NEONGRID_EVENTS_CONTRACT_PARTICIPANTS", &c.Events.ContractParticipants)
+	if err := intEnv("NEONGRID_EVENTS_CONTRACT_PARTICIPANTS", &c.Events.ContractParticipants); err != nil {
+		return err
+	}
+	return intEnv("NEONGRID_EVENTS_COLLISION_MINUTES", &c.Events.CollisionMinutes)
 }
 
 func str(name string, target *string) {

@@ -70,7 +70,8 @@ func testRules() Rules {
 		NickPenaltySeconds: 40, PartPenaltySeconds: 50, QuitPenaltySeconds: 60, KickPenaltySeconds: 70,
 		EncounterInterval: time.Hour, CityEventInterval: time.Hour, DistrictInterval: time.Hour, PirateDuration: time.Minute,
 		ContractDuration: time.Hour, ContractMaxParticipants: 2,
-		GuestRetention: 24 * time.Hour,
+		CollisionInterval: time.Hour,
+		GuestRetention:    24 * time.Hour,
 	}
 }
 
@@ -495,5 +496,69 @@ func TestContractFailsWhenRunnerDisconnects(t *testing.T) {
 	message, err := e.resolveContractLocked(now.Add(2 * time.Hour))
 	if err != nil || !strings.Contains(message, "CONTRACT FAILED") || e.world.Contract != nil {
 		t.Fatalf("contract failure = %q, %v, %#v", message, err, e.world.Contract)
+	}
+}
+
+func TestConnectedRunnersCollideAndCooldown(t *testing.T) {
+	now := time.Unix(15000, 0)
+	rules := testRules()
+	rules.EncounterInterval = 24 * time.Hour
+	rules.CityEventInterval = 24 * time.Hour
+	rules.DistrictInterval = 24 * time.Hour
+	rules.ContractDuration = 24 * time.Hour
+	repo := newMemoryRepo()
+	e, err := New(repo, rules, rand.New(rand.NewSource(1)), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "alpha", "acct-alpha", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "beta", "acct-beta", now); err != nil {
+		t.Fatal(err)
+	}
+	e.users[AccountKey("acct-alpha")].NextCollisionAt = now
+	e.users[AccountKey("acct-beta")].NextCollisionAt = now
+
+	messages, err := e.Tick(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range messages {
+		found = found || strings.Contains(message, "COLLISION:")
+	}
+	if !found {
+		t.Fatalf("collision was not announced: %#v", messages)
+	}
+	for _, key := range []string{AccountKey("acct-alpha"), AccountKey("acct-beta")} {
+		p := e.users[key]
+		if !p.NextCollisionAt.After(now) || p.Heat == 0 {
+			t.Fatalf("collision state for %s = %+v", key, p)
+		}
+	}
+
+	messages, err = e.Tick(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if strings.Contains(message, "COLLISION:") {
+			t.Fatalf("collision ignored cooldown: %#v", messages)
+		}
+	}
+}
+
+func TestCollisionPowerAndLossUseRunnerBuild(t *testing.T) {
+	weak := &Player{Level: 1}
+	strong := &Player{
+		Level: 1, Heat: MaxHeat, Faction: FactionGhostline, District: DistrictCorporateArcology,
+		Equipment: map[string]Item{SlotDeck: {Rating: 5}},
+	}
+	if collisionPower(strong) <= collisionPower(weak) {
+		t.Fatalf("strong runner power = %d, weak runner power = %d", collisionPower(strong), collisionPower(weak))
+	}
+	if got := collisionLoss(&Player{Faction: FactionNomad}, 100); got >= 100 {
+		t.Fatalf("nomad collision loss = %d, want mitigation", got)
 	}
 }

@@ -20,7 +20,7 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	guest := &game.Player{
 		Identity: game.GuestKey("runner"), Nick: "runner", Guest: true, Level: 3,
 		ProgressSeconds: 12, LastProgressAt: now, LastSeenAt: now, Connected: true,
-		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour),
+		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour), NextCollisionAt: now.Add(2 * time.Hour),
 		Heat: 42, LastHeatAt: now,
 		Equipment: map[string]game.Item{game.SlotWeaponRig: {Name: "Mono-edge Mk 1", Rating: 1, Unique: true}},
 	}
@@ -42,6 +42,9 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	}
 	if loaded[0].Heat != 42 || !loaded[0].LastHeatAt.Equal(now) {
 		t.Fatalf("heat did not round-trip: %+v", loaded[0])
+	}
+	if !loaded[0].NextCollisionAt.Equal(now.Add(2 * time.Hour)) {
+		t.Fatalf("collision deadline did not round-trip: %+v", loaded[0])
 	}
 
 	bound, err := store.MigrateGuest(game.GuestKey("runner"), game.AccountKey("nylan"), "nylan", "runner")
@@ -143,6 +146,13 @@ INSERT INTO players(identity, nick) VALUES('acct:test', 'runner');`)
 	}
 	if heat != 0 {
 		t.Fatalf("migrated heat = %d, want 0", heat)
+	}
+	var nextCollision int64
+	if err := store.db.QueryRow("SELECT next_collision_at FROM players WHERE identity = ?", "acct:test").Scan(&nextCollision); err != nil {
+		t.Fatal(err)
+	}
+	if nextCollision != 0 {
+		t.Fatalf("migrated collision deadline = %d, want 0", nextCollision)
 	}
 }
 

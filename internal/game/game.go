@@ -79,6 +79,7 @@ type Player struct {
 	Connected       bool
 	LastSeenAt      time.Time
 	NextEncounterAt time.Time
+	NextCollisionAt time.Time
 	District        string
 	NextDistrictAt  time.Time
 	Heat            int
@@ -148,6 +149,7 @@ type Rules struct {
 	HeatDecayInterval         time.Duration
 	ContractDuration          time.Duration
 	ContractMaxParticipants   int
+	CollisionInterval         time.Duration
 	PirateDuration            time.Duration
 	GuestRetention            time.Duration
 }
@@ -200,6 +202,9 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 	if rules.ContractMaxParticipants < 1 {
 		rules.ContractMaxParticipants = 4
 	}
+	if rules.CollisionInterval < time.Minute {
+		rules.CollisionInterval = 90 * time.Minute
+	}
 	if rules.PirateDuration < time.Second {
 		rules.PirateDuration = 5 * time.Minute
 	}
@@ -229,6 +234,9 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 		}
 		if p.NextEncounterAt.IsZero() {
 			p.NextEncounterAt = now.Add(rules.EncounterInterval)
+		}
+		if p.NextCollisionAt.IsZero() {
+			p.NextCollisionAt = now.Add(rules.CollisionInterval)
 		}
 		users[p.Identity] = p
 		if err := repo.Save(p); err != nil {
@@ -285,6 +293,7 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 		p = newPlayer(identity, nick, account, now)
 		p.NextEncounterAt = now.Add(e.rules.EncounterInterval)
 		p.NextDistrictAt = now.Add(e.rules.DistrictInterval)
+		p.NextCollisionAt = now.Add(e.rules.CollisionInterval)
 		e.users[identity] = p
 	} else if p.Connected {
 		e.advanceLocked(p, now)
@@ -588,6 +597,11 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			return nil, err
 		}
 	}
+	if message, err := e.collisionLocked(now); err != nil {
+		return nil, err
+	} else if message != "" {
+		messages = append(messages, message)
+	}
 	if err := e.rememberLocked(messages...); err != nil {
 		return nil, err
 	}
@@ -775,6 +789,97 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 	p.ProgressSeconds -= loss
 	p.Heat = addHeat(p.Heat, 8)
 	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick), nil
+}
+
+func (e *Engine) collisionLocked(now time.Time) (string, error) {
+	var due []*Player
+	for _, p := range e.users {
+		if p.Connected && !p.NextCollisionAt.IsZero() && !now.Before(p.NextCollisionAt) {
+			due = append(due, p)
+		}
+	}
+	if len(due) == 0 {
+		return "", nil
+	}
+	initiator := due[e.rng.Intn(len(due))]
+	var opponents []*Player
+	for _, p := range e.users {
+		if p.Connected && p != initiator {
+			opponents = append(opponents, p)
+		}
+	}
+	if len(opponents) == 0 {
+		return "", nil
+	}
+	opponent := opponents[e.rng.Intn(len(opponents))]
+	winner, loser := initiator, opponent
+	if collisionPower(opponent)+e.rng.Intn(5) > collisionPower(initiator)+e.rng.Intn(5) {
+		winner, loser = opponent, initiator
+	}
+
+	gain := max64(30, e.rules.LevelDuration(winner.Level)/20)
+	loss := collisionLoss(loser, max64(20, e.rules.LevelDuration(loser.Level)/24))
+	winner.Heat = addHeat(winner.Heat, 3)
+	loser.Heat = addHeat(loser.Heat, 5)
+	message := ""
+	switch e.rng.Intn(4) {
+	case 0:
+		winner.ProgressSeconds += gain
+		loser.ProgressSeconds -= loss
+		message = fmt.Sprintf("[GRID] COLLISION: %s cracked %s's deck and siphoned %s.", winner.Nick, loser.Nick, formatDuration(time.Duration(gain)*time.Second))
+	case 1:
+		winner.ProgressSeconds += gain * 2
+		loser.ProgressSeconds -= max64(15, loss/2)
+		message = fmt.Sprintf("[GRID] COLLISION: %s won a dead-drop race against %s.", winner.Nick, loser.Nick)
+	case 2:
+		winner.ProgressSeconds += max64(15, gain/2)
+		loser.ProgressSeconds -= loss * 2
+		message = fmt.Sprintf("[GRID] COLLISION: %s hunted %s through the %s.", winner.Nick, loser.Nick, loser.District)
+	case 3:
+		winner.ProgressSeconds += gain
+		loser.ProgressSeconds -= loss
+		if item, ok := loser.Equipment[SlotDrone]; ok && !item.Unique && item.Rating > 0 {
+			item.Rating--
+			if !strings.Contains(item.Name, "damaged") {
+				item.Name += " [damaged]"
+			}
+			loser.Equipment[SlotDrone] = item
+		}
+		message = fmt.Sprintf("[GRID] COLLISION: %s jammed %s's drone feed and took the shard.", winner.Nick, loser.Nick)
+	}
+	winner.NextCollisionAt = now.Add(e.rules.CollisionInterval)
+	loser.NextCollisionAt = now.Add(e.rules.CollisionInterval)
+	if err := e.repo.Save(winner); err != nil {
+		return "", err
+	}
+	if err := e.repo.Save(loser); err != nil {
+		return "", err
+	}
+	return message, nil
+}
+
+func collisionPower(p *Player) int {
+	power := p.Level + p.EquipmentRating() + p.Heat/25
+	switch p.Faction {
+	case FactionGhostline:
+		power += 2
+	case FactionChrome, FactionNomad:
+		power++
+	}
+	switch p.District {
+	case DistrictFloodline, DistrictCorporateArcology:
+		power++
+	case DistrictGhostQuarter:
+		power--
+	}
+	return power
+}
+
+func collisionLoss(p *Player, loss int64) int64 {
+	if p.Faction == FactionNomad {
+		return max64(3, loss/2)
+	}
+	return loss
 }
 
 func (e *Engine) rareLootLocked(p *Player) (*Item, error) {

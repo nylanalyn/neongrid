@@ -42,6 +42,7 @@ events:
   heat_decay_minutes: 30
   contract_hours: 8
   contract_participants: 4
+  collision_minutes: 90
 
 guest_retention_days: 14
 reconnect_seconds: 10

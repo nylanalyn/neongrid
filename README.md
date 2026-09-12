@@ -49,7 +49,9 @@ Heat rises when runners broadcast identity changes, get disconnected, lose ICE, 
 
 Megacorp Runs can recruit up to `events.contract_participants` currently connected runners for `events.contract_hours`. Every recruited runner must remain linked until the deadline; a disconnect fails the whole contract and the team takes a setback. Check `!world` for the active contract.
 
-Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval.
+Connected runners may also collide automatically in passive deck hacks, dead-drop races, hunts, and drone incidents. Gear rating, faction, district, and Heat shape the outcome; both runners receive a cooldown so the channel does not become a combat log.
+
+Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval, while `events.collision_minutes` controls the minimum time between passive runner collisions.
 
 ## Configuration
 
