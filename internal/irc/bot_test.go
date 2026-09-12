@@ -57,6 +57,16 @@ func TestGearLineUsesStableSlotOrder(t *testing.T) {
 	}
 }
 
+func TestGearLineMarksUniqueArtifacts(t *testing.T) {
+	got := gearLine(&game.Player{Equipment: map[string]game.Item{
+		game.SlotDeck: {Name: "Blackglass Deck", Unique: true},
+	}})
+	want := "[GRID] loadout | deck: Blackglass Deck [UNIQUE]"
+	if got != want {
+		t.Fatalf("gearLine() = %q, want %q", got, want)
+	}
+}
+
 func TestWorldLineShowsPirateWindowOrNextEvent(t *testing.T) {
 	now := time.Unix(6000, 0)
 	if got := worldLine(game.WorldState{PirateUntil: now.Add(90 * time.Second)}, now); got != "[GRID] pirate frequency active for 1m30s; transmissions safe." {

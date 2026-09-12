@@ -45,13 +45,13 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 3. Preserve accrued progress when duplicate account/identity events bind an already-connected runner.
 4. Ignore the bot’s own account and WHOIS-account events.
 5. Reject blank admin identities and make world-state writes transactional.
-6. Replace loose timestamp parsing and add versioned migrations before districts introduce new persisted fields. **Done:** schema version 2 adds district persistence safely.
+6. Replace loose timestamp parsing and add versioned migrations before districts introduce new persisted fields. **Done:** versioned schema migrations now protect district and unique-loot persistence.
 
 ## Post-MVP roadmap
 
 1. **District MVP done:** named districts, automatic runner movement, and district-shaped ICE encounters. Broader event effects continue in the next item.
 2. **Typed city events done:** event effects now vary by gear, district, faction, runner, and encounter timing; pirate frequency remains the communication-rule event. Further event variety can follow real usage.
-3. Add rare named loot alongside ordinary Mk equipment, with uniqueness enforced by persistence.
+3. **Rare named loot done:** successful ICE encounters can recover persistent, globally unique artifacts alongside ordinary Mk equipment.
 4. Add Heat as a slowly decaying personal risk/reward signal that shapes encounters and status.
 5. Add long-running contracts involving randomly selected runners and meaningful connection stakes.
 6. Add automatic runner-versus-runner collisions with bounded, fair passive outcomes and no grind commands.

@@ -447,7 +447,11 @@ func gearLine(p *game.Player) string {
 	parts := make([]string, 0, len(slots))
 	for _, slot := range slots {
 		if item, ok := p.Equipment[slot]; ok {
-			parts = append(parts, fmt.Sprintf("%s: %s", strings.ReplaceAll(slot, "_", " "), item.Name))
+			name := item.Name
+			if item.Unique {
+				name += " [UNIQUE]"
+			}
+			parts = append(parts, fmt.Sprintf("%s: %s", strings.ReplaceAll(slot, "_", " "), name))
 		}
 	}
 	if len(parts) == 0 {

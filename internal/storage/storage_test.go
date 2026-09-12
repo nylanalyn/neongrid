@@ -21,7 +21,7 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 		Identity: game.GuestKey("runner"), Nick: "runner", Guest: true, Level: 3,
 		ProgressSeconds: 12, LastProgressAt: now, LastSeenAt: now, Connected: true,
 		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour),
-		Equipment: map[string]game.Item{game.SlotWeaponRig: {Name: "Mono-edge Mk 1", Rating: 1}},
+		Equipment: map[string]game.Item{game.SlotWeaponRig: {Name: "Mono-edge Mk 1", Rating: 1, Unique: true}},
 	}
 	if err := store.Save(guest); err != nil {
 		t.Fatal(err)
@@ -32,6 +32,9 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	}
 	if loaded[0].Equipment[game.SlotWeaponRig].Rating != 1 {
 		t.Fatal("equipment did not round-trip")
+	}
+	if !loaded[0].Equipment[game.SlotWeaponRig].Unique {
+		t.Fatal("unique equipment flag did not round-trip")
 	}
 	if loaded[0].District != game.DistrictFloodline || !loaded[0].NextDistrictAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("district did not round-trip: %+v", loaded[0])
@@ -122,5 +125,21 @@ INSERT INTO players(identity, nick) VALUES('acct:test', 'runner');`)
 	}
 	if district != game.DistrictNeonMarket {
 		t.Fatalf("migrated district = %q", district)
+	}
+}
+
+func TestRareItemClaimsAreUnique(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	claimed, err := store.ClaimRareItem("Blackglass Deck", "acct:first")
+	if err != nil || !claimed {
+		t.Fatalf("first claim = %v, %v", claimed, err)
+	}
+	claimed, err = store.ClaimRareItem("Blackglass Deck", "acct:second")
+	if err != nil || claimed {
+		t.Fatalf("duplicate claim = %v, %v", claimed, err)
 	}
 }

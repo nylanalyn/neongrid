@@ -43,6 +43,8 @@ If the endpoint is known to require that legacy mode, set `tls12_only: true` (or
 
 Factions are permanent: Ghostline improves ICE odds and mitigates corporate sweeps, Chrome increases shard gains and bounty/run payouts, and Nomad reduces failed-encounter losses while softening gang wars. City events are typed effects: they can vary by district or faction, modify active runners and gear, and pull encounters forward. Pirate-frequency events remain safe-chat windows.
 
+Successful passive ICE encounters have a small chance to recover a named artifact such as `Blackglass Deck` or `Prototype Mantis Rig`. Each artifact is unique across the Grid and is protected from ordinary level-up gear replacement.
+
 Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval.
 
 ## Configuration

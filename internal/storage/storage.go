@@ -15,7 +15,7 @@ import (
 
 type Store struct{ db *sql.DB }
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
@@ -82,6 +82,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
 			if _, err := tx.Exec("ALTER TABLE players ADD COLUMN next_district_at INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return err
 			}
+		case 2:
+			if _, err := tx.Exec(`CREATE TABLE rare_items (
+  name TEXT PRIMARY KEY,
+  owner_identity TEXT NOT NULL
+)`); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported schema version %d", version)
 		}
@@ -138,6 +145,15 @@ ON CONFLICT(identity) DO UPDATE SET
 func (s *Store) Delete(identity string) error {
 	_, err := s.db.Exec("DELETE FROM players WHERE identity = ?", identity)
 	return err
+}
+
+func (s *Store) ClaimRareItem(name, owner string) (bool, error) {
+	result, err := s.db.Exec(`INSERT INTO rare_items(name, owner_identity) VALUES(?, ?) ON CONFLICT(name) DO NOTHING`, name, owner)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
 }
 
 func (s *Store) MigrateGuest(guestKey, accountKey, account, nick string) (*game.Player, error) {

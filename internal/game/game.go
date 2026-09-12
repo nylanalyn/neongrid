@@ -63,6 +63,7 @@ var equipmentSlots = []string{
 type Item struct {
 	Name   string `json:"name"`
 	Rating int    `json:"rating"`
+	Unique bool   `json:"unique,omitempty"`
 }
 
 type Player struct {
@@ -139,6 +140,7 @@ type Repository interface {
 	LoadAll() ([]*Player, error)
 	Save(*Player) error
 	Delete(string) error
+	ClaimRareItem(name, owner string) (bool, error)
 	MigrateGuest(guestKey, accountKey, account, nick string) (*Player, error)
 	Top(limit int) ([]*Player, error)
 	LoadWorldState() (WorldState, error)
@@ -492,12 +494,21 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			messages = append(messages, fmt.Sprintf("[GRID] %s drifted from %s to %s.", p.Nick, oldDistrict, p.District))
 		}
 		if !p.NextEncounterAt.IsZero() && !now.Before(p.NextEncounterAt) {
-			messages = append(messages, e.encounterLocked(p))
+			message, err := e.encounterLocked(p)
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, message)
 			p.NextEncounterAt = now.Add(e.rules.EncounterInterval)
 			e.advanceLocked(p, now)
 		}
 		for level := oldLevel + 1; level <= p.Level; level++ {
-			messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. %s upgraded.", p.Nick, level, equipmentSlots[(level-2)%len(equipmentSlots)]))
+			slot := equipmentSlots[(level-2)%len(equipmentSlots)]
+			if item := p.Equipment[slot]; item.Unique {
+				messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. UNIQUE %s retained.", p.Nick, level, item.Name))
+				continue
+			}
+			messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. %s upgraded.", p.Nick, level, slot))
 		}
 		if err := e.repo.Save(p); err != nil {
 			return nil, err
@@ -626,11 +637,29 @@ func (e *Engine) advanceLocked(p *Player, now time.Time) {
 		p.Level++
 		tier := 1 + (p.Level-1)/3
 		slot := equipmentSlots[(p.Level-2)%len(equipmentSlots)]
-		p.Equipment[slot] = Item{Name: equipmentName(slot, tier), Rating: tier}
+		if item, ok := p.Equipment[slot]; !ok || !item.Unique {
+			p.Equipment[slot] = Item{Name: equipmentName(slot, tier), Rating: tier}
+		}
 	}
 }
 
-func (e *Engine) encounterLocked(p *Player) string {
+type rareItem struct {
+	name   string
+	slot   string
+	rating int
+}
+
+var rareItems = []rareItem{
+	{name: "Blackglass Deck", slot: SlotDeck, rating: 8},
+	{name: "Saint-9 Reflex Coil", slot: SlotNeuralImplant, rating: 7},
+	{name: "Prototype Mantis Rig", slot: SlotWeaponRig, rating: 9},
+	{name: "Aegis Nullplate", slot: SlotArmorPlating, rating: 8},
+	{name: "Whisperbyte Scout", slot: SlotDrone, rating: 7},
+}
+
+const rareLootChancePercent = 5
+
+func (e *Engine) encounterLocked(p *Player) (string, error) {
 	rating := p.Level + p.EquipmentRating()
 	if p.Faction == FactionGhostline {
 		rating += 2
@@ -643,7 +672,14 @@ func (e *Engine) encounterLocked(p *Player) string {
 			gain = gain * 3 / 2
 		}
 		p.ProgressSeconds += gain
-		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.", p.Nick)
+		item, err := e.rareLootLocked(p)
+		if err != nil {
+			return "", err
+		}
+		if item != nil {
+			return fmt.Sprintf("[GRID] %s survived an ICE breach and recovered UNIQUE %s.", p.Nick, item.Name), nil
+		}
+		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.", p.Nick), nil
 	}
 	loss := max64(5, e.rules.LevelDuration(p.Level)/30)
 	if p.Faction == FactionNomad {
@@ -653,7 +689,29 @@ func (e *Engine) encounterLocked(p *Player) string {
 		loss = loss * 3 / 2
 	}
 	p.ProgressSeconds -= loss
-	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick)
+	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.", p.Nick), nil
+}
+
+func (e *Engine) rareLootLocked(p *Player) (*Item, error) {
+	if e.rng.Intn(100) >= rareLootChancePercent {
+		return nil, nil
+	}
+	start := e.rng.Intn(len(rareItems))
+	for i := range rareItems {
+		candidate := rareItems[(start+i)%len(rareItems)]
+		claimed, err := e.repo.ClaimRareItem(candidate.name, p.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if !claimed {
+			continue
+		}
+		item := &Item{Name: candidate.name, Rating: candidate.rating, Unique: true}
+		ensureEquipment(p)
+		p.Equipment[candidate.slot] = *item
+		return item, nil
+	}
+	return nil, nil
 }
 
 func (e *Engine) randomDistrictLocked(current string) string {

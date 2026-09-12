@@ -1,6 +1,7 @@
 package game
 
 import (
+	"math/rand"
 	"sort"
 	"strings"
 	"testing"
@@ -10,9 +11,12 @@ import (
 type memoryRepo struct {
 	players map[string]*Player
 	world   WorldState
+	rares   map[string]string
 }
 
-func newMemoryRepo() *memoryRepo { return &memoryRepo{players: map[string]*Player{}} }
+func newMemoryRepo() *memoryRepo {
+	return &memoryRepo{players: map[string]*Player{}, rares: map[string]string{}}
+}
 
 func (r *memoryRepo) LoadAll() ([]*Player, error) {
 	var out []*Player
@@ -23,6 +27,13 @@ func (r *memoryRepo) LoadAll() ([]*Player, error) {
 }
 func (r *memoryRepo) Save(p *Player) error    { r.players[p.Identity] = clonePlayer(p); return nil }
 func (r *memoryRepo) Delete(key string) error { delete(r.players, key); return nil }
+func (r *memoryRepo) ClaimRareItem(name, owner string) (bool, error) {
+	if _, ok := r.rares[name]; ok {
+		return false, nil
+	}
+	r.rares[name] = owner
+	return true, nil
+}
 func (r *memoryRepo) MigrateGuest(guestKey, accountKey, account, nick string) (*Player, error) {
 	p := r.players[guestKey]
 	if p == nil {
@@ -330,5 +341,55 @@ func TestDistrictEncounterModifiers(t *testing.T) {
 	}
 	if districtEncounterBonus(DistrictGhostQuarter) >= districtEncounterBonus(DistrictNeonMarket) {
 		t.Fatal("ghost quarter should worsen ICE odds")
+	}
+}
+
+func TestUniqueGearSurvivesLevelUp(t *testing.T) {
+	now := time.Unix(9000, 0)
+	rules := testRules()
+	e, err := New(newMemoryRepo(), rules, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newPlayer(AccountKey("acct"), "runner", "acct", now)
+	p.Connected = true
+	p.Equipment[SlotWeaponRig] = Item{Name: "Prototype Mantis Rig", Rating: 9, Unique: true}
+	e.advanceLocked(p, now.Add(time.Minute))
+	if p.Level != 2 || p.Equipment[SlotWeaponRig].Name != "Prototype Mantis Rig" || !p.Equipment[SlotWeaponRig].Unique {
+		t.Fatalf("unique gear was replaced: %+v", p)
+	}
+}
+
+func TestRareLootAwardsUniqueArtifact(t *testing.T) {
+	now := time.Unix(10000, 0)
+	repo := newMemoryRepo()
+	e, err := New(repo, testRules(), rand.New(rand.NewSource(1)), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newPlayer(AccountKey("acct"), "runner", "acct", now)
+	var item *Item
+	for seed := int64(0); seed < 10000 && item == nil; seed++ {
+		e.rng = rand.New(rand.NewSource(seed))
+		item, err = e.rareLootLocked(p)
+	}
+	if err != nil || item == nil {
+		t.Fatalf("rare loot award = %+v, %v", item, err)
+	}
+	if !item.Unique || item.Rating < 7 {
+		t.Fatalf("rare item = %+v", item)
+	}
+	if repo.rares[item.Name] != p.Identity {
+		t.Fatalf("rare item owner = %q, want %q", repo.rares[item.Name], p.Identity)
+	}
+	found := false
+	for _, equipped := range p.Equipment {
+		if equipped.Name == item.Name && equipped.Unique {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("rare item was not equipped: %+v", p.Equipment)
 	}
 }
