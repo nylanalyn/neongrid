@@ -41,7 +41,7 @@ For older IRC endpoints that abort modern TLS negotiation, the bot retries once 
 
 Factions are permanent: Ghostline improves ICE odds, Chrome increases successful shard gains, and Nomad reduces failed-encounter losses. City events now also apply small progress boosts or setbacks to active runners; pirate-frequency events remain safe-chat windows.
 
-Normal chat in the game channel is still a transmission and receives the normal penalty. `!status`, `!runner`, and `!top` are safe read-only commands; use another channel or a private message for other administration.
+Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration.
 
 ## Configuration
 

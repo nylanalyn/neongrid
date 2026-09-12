@@ -272,7 +272,7 @@ func freeCommand(message string, kind game.Activity) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimPrefix(fields[0], "!")) {
-	case "status", "runner", "top", "gear", "world", "events":
+	case "status", "runner", "top", "gear", "world", "events", "help":
 		return true
 	default:
 		return false
@@ -334,7 +334,9 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		}
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction locked: %s", p.Faction))
 	case "help":
-		client.Cmd.Message(target, "[GRID] !status/!runner !top !gear !world !events !faction !help — passive progression; keep chatter out of the game channel.")
+		client.Cmd.Message(target, fmt.Sprintf("[GRID] NeonGrid is an idle-RPG: stay linked to gain Rep. In %s, speech, /me, nick changes, PART, QUIT, and KICK add delay to your next Rep. Other channels are clean.", b.cfg.Channel))
+		client.Cmd.Message(target, "[GRID] Zero-penalty commands: !help !status/!runner !top !gear !world !events. Pirate frequency can temporarily make game-channel chatter safe.")
+		client.Cmd.Message(target, "[GRID] Lock in one faction with !faction <name>: ghostline = better ICE odds; chrome = bigger shard gains; nomad = softer ICE losses.")
 	case "pirate":
 		if !b.isAdmin(account) {
 			client.Cmd.Message(target, "[GRID] admin clearance required.")

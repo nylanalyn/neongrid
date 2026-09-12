@@ -20,18 +20,21 @@ func TestNamesNick(t *testing.T) {
 }
 
 func TestFreeCommand(t *testing.T) {
-	for _, command := range []string{"!status", "!runner", "!top now", "!gear", "!world", "!events"} {
+	for _, command := range []string{"!help", "!status", "!runner", "!top now", "!gear", "!world", "!events"} {
 		if !freeCommand(command, game.ActivityChat) {
 			t.Errorf("freeCommand(%q) = false", command)
 		}
 	}
-	for _, command := range []string{"hello", "!help"} {
+	for _, command := range []string{"hello", "!pirate"} {
 		if freeCommand(command, game.ActivityChat) {
 			t.Errorf("freeCommand(%q) = true", command)
 		}
 	}
 	if freeCommand("!status", game.ActivityAction) {
 		t.Error("action command was treated as free")
+	}
+	if freeCommand("!faction ghostline", game.ActivityChat) {
+		t.Error("faction selection was treated as free")
 	}
 }
 
