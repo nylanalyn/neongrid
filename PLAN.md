@@ -50,7 +50,7 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 ## Post-MVP roadmap
 
 1. **District MVP done:** named districts, automatic runner movement, and district-shaped ICE encounters. Broader event effects continue in the next item.
-2. Evolve city events into richer typed effects that can influence gear, districts, factions, runners, encounters, and communication rules.
+2. **Typed city events done:** event effects now vary by gear, district, faction, runner, and encounter timing; pirate frequency remains the communication-rule event. Further event variety can follow real usage.
 3. Add rare named loot alongside ordinary Mk equipment, with uniqueness enforced by persistence.
 4. Add Heat as a slowly decaying personal risk/reward signal that shapes encounters and status.
 5. Add long-running contracts involving randomly selected runners and meaningful connection stakes.

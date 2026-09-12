@@ -41,7 +41,7 @@ If the endpoint is known to require that legacy mode, set `tls12_only: true` (or
 - `!help` — show the compact command list
 - `!pirate` — admin-only manual pirate-frequency window
 
-Factions are permanent: Ghostline improves ICE odds, Chrome increases successful shard gains, and Nomad reduces failed-encounter losses. City events now also apply small progress boosts or setbacks to active runners; pirate-frequency events remain safe-chat windows.
+Factions are permanent: Ghostline improves ICE odds and mitigates corporate sweeps, Chrome increases shard gains and bounty/run payouts, and Nomad reduces failed-encounter losses while softening gang wars. City events are typed effects: they can vary by district or faction, modify active runners and gear, and pull encounters forward. Pirate-frequency events remain safe-chat windows.
 
 Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval.
 

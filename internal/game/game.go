@@ -88,18 +88,30 @@ type WorldState struct {
 	RecentEvents    []string
 }
 
+type cityEventKind string
+
+const (
+	cityEventBlackout       cityEventKind = "blackout"
+	cityEventCorporateSweep cityEventKind = "corporate_sweep"
+	cityEventDataLeak       cityEventKind = "data_leak"
+	cityEventGangWar        cityEventKind = "gang_war"
+	cityEventBounty         cityEventKind = "bounty"
+	cityEventMegacorpRun    cityEventKind = "megacorp_run"
+)
+
 type cityEvent struct {
+	kind           cityEventKind
 	text           string
 	progressChange int64
 }
 
 var cityEvents = []cityEvent{
-	{text: "BLACKOUT rolls across the lower stacks.", progressChange: -60},
-	{text: "CORPORATE SWEEP detected. Keep your signatures cold.", progressChange: -90},
-	{text: "DATA LEAK: fresh intel is spilling onto the Grid.", progressChange: 120},
-	{text: "GANG WAR erupts beneath the maglev lines.", progressChange: -120},
-	{text: "BOUNTY contract posted; every faction is watching.", progressChange: 90},
-	{text: "MEGACORP RUN authorized. The payout is probably a trap.", progressChange: 180},
+	{kind: cityEventBlackout, text: "BLACKOUT rolls across the lower stacks.", progressChange: -60},
+	{kind: cityEventCorporateSweep, text: "CORPORATE SWEEP detected. Keep your signatures cold.", progressChange: -90},
+	{kind: cityEventDataLeak, text: "DATA LEAK: fresh intel is spilling onto the Grid.", progressChange: 120},
+	{kind: cityEventGangWar, text: "GANG WAR erupts beneath the maglev lines.", progressChange: -120},
+	{kind: cityEventBounty, text: "BOUNTY contract posted; every faction is watching.", progressChange: 90},
+	{kind: cityEventMegacorpRun, text: "MEGACORP RUN authorized. The payout is probably a trap.", progressChange: 180},
 }
 
 type Rules struct {
@@ -706,12 +718,73 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 		if !p.Connected {
 			continue
 		}
-		p.ProgressSeconds += event.progressChange
+		p.ProgressSeconds += cityEventProgressChange(event, p)
+		applyCityEventGear(event, p)
+		if event.kind == cityEventDataLeak {
+			// Fresh intel draws an ICE trace forward so the next passive encounter arrives sooner.
+			nextEncounter := now.Add(15 * time.Minute)
+			if p.NextEncounterAt.IsZero() || p.NextEncounterAt.After(nextEncounter) {
+				p.NextEncounterAt = nextEncounter
+			}
+		}
 		if err := e.repo.Save(p); err != nil {
 			return "", err
 		}
 	}
 	return fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", event.text, formatProgressChange(event.progressChange)), nil
+}
+
+func cityEventProgressChange(event cityEvent, p *Player) int64 {
+	change := event.progressChange
+	switch event.kind {
+	case cityEventBlackout:
+		if p.District == DistrictOldTransit {
+			change -= 60
+		}
+	case cityEventCorporateSweep:
+		if p.Faction == FactionGhostline {
+			change /= 2
+		}
+		if p.District == DistrictCorporateArcology {
+			change -= 30
+		}
+	case cityEventDataLeak:
+		if p.District == DistrictFloodline {
+			change += 60
+		}
+	case cityEventGangWar:
+		if p.District == DistrictGhostQuarter {
+			change -= 90
+		}
+		if p.Faction == FactionNomad {
+			change += 30
+		}
+	case cityEventBounty:
+		if p.Faction == FactionChrome {
+			change += 60
+		}
+	case cityEventMegacorpRun:
+		if p.District == DistrictCorporateArcology || p.Faction == FactionChrome {
+			change += 60
+		}
+	}
+	return change
+}
+
+func applyCityEventGear(event cityEvent, p *Player) {
+	if event.kind != cityEventDataLeak {
+		return
+	}
+	ensureEquipment(p)
+	item := p.Equipment[SlotDeck]
+	if item.Name == "" {
+		item.Name = "Ghostline deck"
+	}
+	item.Rating++
+	if !strings.Contains(item.Name, "leak-overclocked") {
+		item.Name += " [leak-overclocked]"
+	}
+	p.Equipment[SlotDeck] = item
 }
 
 func formatProgressChange(seconds int64) string {

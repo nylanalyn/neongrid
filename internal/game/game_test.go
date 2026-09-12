@@ -2,6 +2,7 @@ package game
 
 import (
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -257,6 +258,25 @@ func TestCityEventProgressChangesAreMeaningful(t *testing.T) {
 	}
 	if got := formatProgressChange(-90); got != "-1m30s progress" {
 		t.Fatalf("formatProgressChange(-90) = %q", got)
+	}
+}
+
+func TestTypedCityEventEffects(t *testing.T) {
+	sweep := cityEvent{kind: cityEventCorporateSweep, progressChange: -90}
+	if got := cityEventProgressChange(sweep, &Player{Faction: FactionGhostline}); got != -45 {
+		t.Fatalf("ghostline sweep change = %d, want -45", got)
+	}
+	if got := cityEventProgressChange(cityEvent{kind: cityEventBlackout, progressChange: -60}, &Player{District: DistrictOldTransit}); got != -120 {
+		t.Fatalf("old transit blackout change = %d, want -120", got)
+	}
+	deckRunner := &Player{District: DistrictFloodline, Equipment: map[string]Item{SlotDeck: {Name: "Ghostline deck Mk 1", Rating: 1}}}
+	leak := cityEvent{kind: cityEventDataLeak, progressChange: 120}
+	if got := cityEventProgressChange(leak, deckRunner); got != 180 {
+		t.Fatalf("floodline leak change = %d, want 180", got)
+	}
+	applyCityEventGear(leak, deckRunner)
+	if deckRunner.Equipment[SlotDeck].Rating != 2 || !strings.Contains(deckRunner.Equipment[SlotDeck].Name, "leak-overclocked") {
+		t.Fatalf("data leak gear effect = %+v", deckRunner.Equipment[SlotDeck])
 	}
 }
 
