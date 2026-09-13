@@ -128,7 +128,7 @@ func buildPage(players []*game.Player, world game.WorldState, channel string, ru
 		if players[i].ProgressSeconds != players[j].ProgressSeconds {
 			return players[i].ProgressSeconds > players[j].ProgressSeconds
 		}
-		return strings.ToLower(players[i].Nick) < strings.ToLower(players[j].Nick)
+		return strings.ToLower(players[i].DisplayName()) < strings.ToLower(players[j].DisplayName())
 	})
 
 	data := pageData{
@@ -195,7 +195,7 @@ func runnerDataFor(p *game.Player, rules game.Rules) runnerData {
 		artifacts = []string{"none"}
 	}
 	return runnerData{
-		Nick:      p.Nick,
+		Nick:      p.DisplayName(),
 		Rep:       p.Level,
 		District:  p.District,
 		Heat:      p.Heat,

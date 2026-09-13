@@ -143,7 +143,7 @@ func (s *Store) save(exec interface {
 	if err != nil {
 		return err
 	}
-	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles, LastFactionSwapAt: p.LastFactionSwapAt})
+	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles, LastFactionSwapAt: p.LastFactionSwapAt, Alias: p.Alias})
 	if err != nil {
 		return err
 	}
@@ -312,6 +312,7 @@ type playerHistory struct {
 	Scars             []string  `json:"scars"`
 	Titles            []string  `json:"titles"`
 	LastFactionSwapAt time.Time `json:"last_faction_swap_at,omitempty"`
+	Alias             string    `json:"alias,omitempty"`
 }
 
 func scanPlayer(row scanner) (*game.Player, error) {
@@ -342,7 +343,7 @@ func scanPlayer(row scanner) (*game.Player, error) {
 	if err := json.Unmarshal([]byte(history), &savedHistory); err != nil {
 		return nil, err
 	}
-	p.Scars, p.Titles = savedHistory.Scars, savedHistory.Titles
+	p.Scars, p.Titles, p.Alias = savedHistory.Scars, savedHistory.Titles, savedHistory.Alias
 	p.LastFactionSwapAt = savedHistory.LastFactionSwapAt
 	return &p, nil
 }
@@ -378,6 +379,9 @@ func merge(guest, account *game.Player) *game.Player {
 	}
 	if guest.LastFactionSwapAt.After(result.LastFactionSwapAt) {
 		result.LastFactionSwapAt = guest.LastFactionSwapAt
+	}
+	if result.Alias == "" {
+		result.Alias = guest.Alias
 	}
 	for slot, item := range guest.Equipment {
 		if item.Rating > result.Equipment[slot].Rating {

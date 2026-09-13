@@ -16,13 +16,13 @@ func TestBuildPageSortsRunnersAndCountsDistricts(t *testing.T) {
 	now := time.Unix(2000, 0)
 	players := []*game.Player{
 		{Nick: "zeta", Level: 2, ProgressSeconds: 3, District: game.DistrictFloodline, Connected: true},
-		{Nick: "alpha", Level: 3, District: game.DistrictNeonMarket, Connected: true},
+		{Nick: "alpha", Alias: "chicken-licker", Level: 3, District: game.DistrictNeonMarket, Connected: true},
 	}
 	data := buildPage(players, game.WorldState{NextCityEventAt: now.Add(time.Hour)}, "#neongrid", game.Rules{BaseLevelSeconds: 60}, now)
 	if data.Active != 2 || data.Known != 2 || len(data.ActiveRunners) != 2 {
 		t.Fatalf("runner counts = %#v", data)
 	}
-	if data.Leaderboard[0].Nick != "alpha" {
+	if data.Leaderboard[0].Nick != "chicken-licker" {
 		t.Fatalf("leaderboard = %#v", data.Leaderboard)
 	}
 	for _, district := range data.Districts {

@@ -17,6 +17,7 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 
 - Authenticated runners use the IRC account name as their stable key.
 - Unauthenticated users get a temporary `guest:<nick>` runner immediately; account authentication migrates that runner without losing state.
+- Runners can set a stable display alias; the current nick remains the IRC identity.
 - Progress is accumulated from timestamps only while the runner is marked connected. Startup clears stale online presence, so a restart never grants offline progress.
 - Speaking, `/me`, nick changes, PART, QUIT, and KICK in the configured game channel add level-scaled delay. Other channels are ignored.
 - Level-ups advance one equipment slot, and passive ticks can emit encounters and city events.

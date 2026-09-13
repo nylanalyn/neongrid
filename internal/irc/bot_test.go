@@ -27,7 +27,7 @@ func TestNamesNick(t *testing.T) {
 }
 
 func TestFreeCommand(t *testing.T) {
-	for _, command := range []string{"!help", "!status", "!runner", "!top now", "!gear", "!world", "!events"} {
+	for _, command := range []string{"!help", "!status", "!runner", "!top now", "!gear", "!world", "!events", "!alias chicken-licker"} {
 		if !freeCommand(command, game.ActivityChat) {
 			t.Errorf("freeCommand(%q) = false", command)
 		}
@@ -70,9 +70,9 @@ func TestGearLineMarksUniqueArtifacts(t *testing.T) {
 
 func TestStatusLineShowsRunnerHistory(t *testing.T) {
 	got := statusLine(&game.Player{
-		Nick: "runner", Level: 5, District: game.DistrictFloodline, Titles: []string{"ICEbreaker"}, Scars: []string{game.ScarGhostSignal},
+		Nick: "rumi", Alias: "chicken-licker", Level: 5, District: game.DistrictFloodline, Titles: []string{"ICEbreaker"}, Scars: []string{game.ScarGhostSignal},
 	}, config.Defaults().Rules())
-	for _, want := range []string{"title ICEbreaker", "scars Ghost Signal"} {
+	for _, want := range []string{"chicken-licker", "title ICEbreaker", "scars Ghost Signal"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status line %q does not contain %q", got, want)
 		}

@@ -39,6 +39,7 @@ If the endpoint is known to require that legacy mode, set `tls12_only: true` (or
 - `!gear` — show the current equipment loadout
 - `!world` — show pirate-frequency and city-event timing
 - `!events` — show the latest persisted passive event announcements
+- `!alias <name>` / `!alias clear` — set or clear the stable public netrunner name
 - `!faction ghostline|chrome|nomad` — choose a lightweight specialization; rare system crashes allow one respec
 - `!help` — show the compact command list
 - `!pirate` — admin-only manual pirate-frequency window
@@ -55,7 +56,9 @@ Connected runners may also collide automatically in passive deck hacks, dead-dro
 
 Rare incidents can leave persistent cyberware scars such as `Ghost Signal`, `Burned Optic`, or `Synthetic Adrenal Gland`; some help and some hurt. Titles such as `ICEbreaker`, `Corporate Liability`, and `Ghost of Floodline` are awarded automatically from runner milestones and appear in `!status` and `!top`.
 
-Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval, while `events.collision_minutes` controls the minimum time between passive runner collisions.
+Normal chat in the game channel is still a transmission and receives the normal penalty. `!help`, `!status`, `!runner`, `!top`, `!gear`, `!world`, and `!events` are safe read-only commands; `!alias` is a zero-penalty profile setting. Use another channel or a private message for other administration. Runners drift districts automatically; `events.district_hours` controls the interval, while `events.collision_minutes` controls the minimum time between passive runner collisions.
+
+Authenticated runners can set a stable public netrunner name with `!alias chicken-licker`. Announcements, leaderboards, status, contracts, and the web observer use the alias while the underlying IRC account identity remains unchanged. Aliases are limited to 24 printable ASCII characters without spaces; `!alias clear` returns to the current nick.
 
 ## Configuration
 

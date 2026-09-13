@@ -18,7 +18,7 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 
 	now := time.Unix(1000, 0)
 	guest := &game.Player{
-		Identity: game.GuestKey("runner"), Nick: "runner", Guest: true, Level: 3,
+		Identity: game.GuestKey("runner"), Nick: "runner", Alias: "chicken-licker", Guest: true, Level: 3,
 		ProgressSeconds: 12, LastProgressAt: now, LastSeenAt: now, Connected: true,
 		District: game.DistrictFloodline, NextDistrictAt: now.Add(time.Hour), NextCollisionAt: now.Add(2 * time.Hour),
 		Heat: 42, LastHeatAt: now,
@@ -59,7 +59,7 @@ func TestSQLiteRoundTripAndGuestMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound.Identity != game.AccountKey("nylan") || bound.Guest || bound.Level != 3 {
+	if bound.Identity != game.AccountKey("nylan") || bound.Guest || bound.Level != 3 || bound.Alias != "chicken-licker" {
 		t.Fatalf("bound = %+v", bound)
 	}
 	loaded, err = store.LoadAll()

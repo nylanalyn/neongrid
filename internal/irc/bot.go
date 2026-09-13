@@ -254,7 +254,11 @@ func (b *Bot) handleMessage(client *girc.Client, e girc.Event) {
 	if !freeCommand(message, kind) {
 		penalty, _, err := b.game.Activity(identity, e.Source.Name, e.Params[0], kind, utf8.RuneCountInString(message), eventTime(e))
 		if err == nil && penalty > 0 {
-			client.Cmd.Message(e.Params[0], fmt.Sprintf("[GRID] %s broadcast into the Grid. +%s to next Rep.", e.Source.Name, formatPenalty(penalty)))
+			name := e.Source.Name
+			if p, statusErr := b.game.Status(identity, e.Source.Name, eventTime(e)); statusErr == nil {
+				name = p.DisplayName()
+			}
+			client.Cmd.Message(e.Params[0], fmt.Sprintf("[GRID] %s broadcast into the Grid. +%s to next Rep.", name, formatPenalty(penalty)))
 		}
 	}
 	b.handleCommand(client, &e, identity, account)
@@ -296,7 +300,11 @@ func (b *Bot) handleNick(client *girc.Client, e girc.Event) {
 		b.log.Printf("nick %s: %v", e.Source.Name, err)
 	}
 	if err == nil && penalty > 0 {
-		client.Cmd.Message(b.cfg.Channel, fmt.Sprintf("[GRID] %s altered their network signature. +%s to next Rep.", e.Source.Name, formatPenalty(penalty)))
+		name := e.Source.Name
+		if p, statusErr := b.game.Status("", e.Params[0], eventTime(e)); statusErr == nil {
+			name = p.DisplayName()
+		}
+		client.Cmd.Message(b.cfg.Channel, fmt.Sprintf("[GRID] %s altered their network signature. +%s to next Rep.", name, formatPenalty(penalty)))
 	}
 }
 
@@ -309,7 +317,7 @@ func freeCommand(message string, kind game.Activity) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimPrefix(fields[0], "!")) {
-	case "status", "runner", "top", "gear", "world", "events", "help":
+	case "status", "runner", "top", "gear", "world", "events", "help", "alias":
 		return true
 	default:
 		return false
@@ -343,7 +351,7 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 			if title == "" {
 				title = "unranked"
 			}
-			client.Cmd.Message(target, fmt.Sprintf("[GRID] #%d %s — Rep %d | %s", i+1, p.Nick, p.Level, title))
+			client.Cmd.Message(target, fmt.Sprintf("[GRID] #%d %s — Rep %d | %s", i+1, p.DisplayName(), p.Level, title))
 		}
 	case "gear":
 		p, err := b.game.Status(identity, e.Source.Name, now)
@@ -363,6 +371,34 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		for _, message := range events {
 			client.Cmd.Message(target, message)
 		}
+	case "alias":
+		if len(fields) == 1 {
+			p, err := b.game.Status(identity, e.Source.Name, now)
+			if err != nil {
+				client.Cmd.Message(target, "[GRID] no runner profile found yet.")
+				return
+			}
+			alias := p.Alias
+			if alias == "" {
+				alias = "(using current nick)"
+			}
+			client.Cmd.Message(target, "[GRID] netrunner name: "+alias+" | set with !alias <name> or clear with !alias clear.")
+			return
+		}
+		if len(fields) != 2 {
+			client.Cmd.Message(target, "[GRID] usage: !alias <name> or !alias clear.")
+			return
+		}
+		alias := fields[1]
+		if strings.EqualFold(alias, "clear") {
+			alias = ""
+		}
+		p, err := b.game.SetAlias(identity, e.Source.Name, alias, now)
+		if err != nil {
+			client.Cmd.Message(target, "[GRID] alias unavailable: "+err.Error())
+			return
+		}
+		client.Cmd.Message(target, "[GRID] netrunner name set: "+p.DisplayName())
 	case "faction":
 		if len(fields) < 2 {
 			client.Cmd.Message(target, "[GRID] choose once: ghostline (safer ICE), chrome (bigger shards), or nomad (smaller ICE losses).")
@@ -376,8 +412,9 @@ func (b *Bot) handleCommand(client *girc.Client, e *girc.Event, identity, accoun
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] faction set: %s", p.Faction))
 	case "help":
 		client.Cmd.Message(target, fmt.Sprintf("[GRID] NeonGrid is an idle-RPG: stay linked to gain Rep. In %s, speech, /me, nick changes, PART, QUIT, and KICK add delay to your next Rep. Other channels are clean.", b.cfg.Channel))
-		client.Cmd.Message(target, "[GRID] Zero-penalty commands: !help !status/!runner !top !gear !world !events. Pirate frequency can temporarily make game-channel chatter safe.")
+		client.Cmd.Message(target, "[GRID] Zero-penalty commands: !help !status/!runner !top !gear !world !events !alias. Pirate frequency can temporarily make game-channel chatter safe.")
 		client.Cmd.Message(target, "[GRID] Choose !faction <name>: ghostline = better ICE odds; chrome = bigger shard gains; nomad = softer ICE losses. A rare 24h system crash permits one respec.")
+		client.Cmd.Message(target, "[GRID] Set a stable public name with !alias <name>; use !alias clear to restore your current nick.")
 		client.Cmd.Message(target, "[GRID] Megacorp Runs may recruit linked runners; !world shows the active contract and deadline.")
 	case "pirate":
 		if !b.isAdmin(account) {
@@ -452,7 +489,7 @@ func statusLine(p *game.Player, rules game.Rules) string {
 	if scars == "" {
 		scars = "none"
 	}
-	return fmt.Sprintf("[GRID] %s | Rep %d | district %s | heat %d/%d | next %s | rating %d | faction %s | title %s | scars %s | id %s", p.Nick, p.Level, p.District, p.Heat, game.MaxHeat, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, title, scars, identity)
+	return fmt.Sprintf("[GRID] %s | Rep %d | district %s | heat %d/%d | next %s | rating %d | faction %s | title %s | scars %s | id %s", p.DisplayName(), p.Level, p.District, p.Heat, game.MaxHeat, formatPenalty(int64(p.NextLevelIn(rules)/time.Second)), p.EquipmentRating(), faction, title, scars, identity)
 }
 
 func gearLine(p *game.Player) string {

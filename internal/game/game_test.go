@@ -141,6 +141,9 @@ func TestGuestMigratesToAccountWithoutLosingProgress(t *testing.T) {
 	if _, err = e.Join("", "meatbag42", "", now); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = e.SetAlias("", "meatbag42", "chicken-licker", now); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = e.Tick(now.Add(40 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +158,39 @@ func TestGuestMigratesToAccountWithoutLosingProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound.Guest || bound.Identity != AccountKey("nylan") || bound.ProgressSeconds != guest.ProgressSeconds {
+	if bound.Guest || bound.Identity != AccountKey("nylan") || bound.ProgressSeconds != guest.ProgressSeconds || bound.Alias != "chicken-licker" {
 		t.Fatalf("migration lost state: guest=%+v bound=%+v", guest, bound)
+	}
+}
+
+func TestAliasFollowsAccountAcrossNickChanges(t *testing.T) {
+	now := time.Unix(3250, 0)
+	e, err := New(newMemoryRepo(), testRules(), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Join("", "rumi", "acct", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.SetAlias(AccountKey("acct"), "rumi", "chicken-licker", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Rename("rumi", "rumi2", now); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.Status(AccountKey("acct"), "rumi2", now)
+	if err != nil || p.Alias != "chicken-licker" || p.DisplayName() != "chicken-licker" {
+		t.Fatalf("alias after nick change = %+v, %v", p, err)
+	}
+	if _, err = e.SetAlias(AccountKey("acct"), "rumi2", "bad name", now); err == nil {
+		t.Fatal("invalid alias was accepted")
+	}
+	if _, err = e.SetAlias(AccountKey("acct"), "rumi2", "", now); err != nil {
+		t.Fatal(err)
+	}
+	p, err = e.Status(AccountKey("acct"), "rumi2", now)
+	if err != nil || p.DisplayName() != "rumi2" {
+		t.Fatalf("cleared alias = %+v, %v", p, err)
 	}
 }
 

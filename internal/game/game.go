@@ -84,6 +84,7 @@ type Player struct {
 	Identity          string
 	Account           string
 	Nick              string
+	Alias             string
 	Guest             bool
 	Level             int
 	ProgressSeconds   int64
@@ -391,6 +392,26 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 	return clonePlayer(guest), nil
 }
 
+func (e *Engine) SetAlias(identity, nick, alias string, now time.Time) (*Player, error) {
+	alias = strings.TrimSpace(alias)
+	if alias != "" && !validAlias(alias) {
+		return nil, errors.New("alias must be 1-24 printable ASCII characters with no spaces")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	p := e.findLocked(identity, nick)
+	if p == nil {
+		return nil, ErrRunnerNotFound
+	}
+	e.advanceLocked(p, now)
+	p.Alias = alias
+	p.LastSeenAt = now
+	if err := e.repo.Save(p); err != nil {
+		return nil, err
+	}
+	return clonePlayer(p), nil
+}
+
 func (e *Engine) SetFaction(identity, nick, faction string, now time.Time) (*Player, error) {
 	faction = strings.ToLower(strings.TrimSpace(faction))
 	if !validFaction(faction) {
@@ -616,7 +637,7 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			oldDistrict := p.District
 			p.District = e.randomDistrictLocked(oldDistrict)
 			p.NextDistrictAt = now.Add(e.rules.DistrictInterval)
-			messages = append(messages, fmt.Sprintf("[GRID] %s drifted from %s to %s.", p.Nick, oldDistrict, p.District))
+			messages = append(messages, fmt.Sprintf("[GRID] %s drifted from %s to %s.", p.DisplayName(), oldDistrict, p.District))
 		}
 		if !p.NextEncounterAt.IsZero() && !now.Before(p.NextEncounterAt) {
 			message, err := e.encounterLocked(p)
@@ -630,10 +651,10 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 		for level := oldLevel + 1; level <= p.Level; level++ {
 			slot := equipmentSlots[(level-2)%len(equipmentSlots)]
 			if item := p.Equipment[slot]; item.Unique {
-				messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. UNIQUE %s retained.", p.Nick, level, item.Name))
+				messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. UNIQUE %s retained.", p.DisplayName(), level, item.Name))
 				continue
 			}
-			messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. %s upgraded.", p.Nick, level, slot))
+			messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. %s upgraded.", p.DisplayName(), level, slot))
 		}
 		if err := e.repo.Save(p); err != nil {
 			return nil, err
@@ -875,9 +896,9 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 			return "", err
 		}
 		if item != nil {
-			return fmt.Sprintf("[GRID] %s survived an ICE breach and recovered UNIQUE %s.%s", p.Nick, item.Name, scar), nil
+			return fmt.Sprintf("[GRID] %s survived an ICE breach and recovered UNIQUE %s.%s", p.DisplayName(), item.Name, scar), nil
 		}
-		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.%s", p.Nick, scar), nil
+		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.%s", p.DisplayName(), scar), nil
 	}
 	loss := max64(5, e.rules.LevelDuration(p.Level)/30)
 	if p.Faction == FactionNomad {
@@ -892,7 +913,7 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 	if e.rng.Intn(12) == 0 && addScar(p, ScarBurnedOptic) {
 		scar = " Burned Optic acquired."
 	}
-	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.%s", p.Nick, scar), nil
+	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.%s", p.DisplayName(), scar), nil
 }
 
 func (e *Engine) collisionLocked(now time.Time) (string, error) {
@@ -934,15 +955,15 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 	case 0:
 		winner.ProgressSeconds += gain
 		loser.ProgressSeconds -= loss
-		message = fmt.Sprintf("[GRID] COLLISION: %s cracked %s's deck and siphoned %s.%s", winner.Nick, loser.Nick, formatDuration(time.Duration(gain)*time.Second), scar)
+		message = fmt.Sprintf("[GRID] COLLISION: %s cracked %s's deck and siphoned %s.%s", winner.DisplayName(), loser.DisplayName(), formatDuration(time.Duration(gain)*time.Second), scar)
 	case 1:
 		winner.ProgressSeconds += gain * 2
 		loser.ProgressSeconds -= max64(15, loss/2)
-		message = fmt.Sprintf("[GRID] COLLISION: %s won a dead-drop race against %s.%s", winner.Nick, loser.Nick, scar)
+		message = fmt.Sprintf("[GRID] COLLISION: %s won a dead-drop race against %s.%s", winner.DisplayName(), loser.DisplayName(), scar)
 	case 2:
 		winner.ProgressSeconds += max64(15, gain/2)
 		loser.ProgressSeconds -= loss * 2
-		message = fmt.Sprintf("[GRID] COLLISION: %s hunted %s through the %s.%s", winner.Nick, loser.Nick, loser.District, scar)
+		message = fmt.Sprintf("[GRID] COLLISION: %s hunted %s through the %s.%s", winner.DisplayName(), loser.DisplayName(), loser.District, scar)
 	case 3:
 		winner.ProgressSeconds += gain
 		loser.ProgressSeconds -= loss
@@ -953,7 +974,7 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 			}
 			loser.Equipment[SlotDrone] = item
 		}
-		message = fmt.Sprintf("[GRID] COLLISION: %s jammed %s's drone feed and took the shard.%s", winner.Nick, loser.Nick, scar)
+		message = fmt.Sprintf("[GRID] COLLISION: %s jammed %s's drone feed and took the shard.%s", winner.DisplayName(), loser.DisplayName(), scar)
 	}
 	updateTitles(winner)
 	updateTitles(loser)
@@ -1114,6 +1135,18 @@ func validFaction(faction string) bool {
 	}
 }
 
+func validAlias(alias string) bool {
+	if alias == "" || len(alias) > 24 {
+		return false
+	}
+	for _, r := range alias {
+		if r < '!' || r > '~' {
+			return false
+		}
+	}
+	return true
+}
+
 func disconnectHeat(kind Activity) int {
 	switch kind {
 	case ActivityKick:
@@ -1173,7 +1206,7 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 		if event.kind == cityEventCorporateSweep {
 			p.Heat = addHeat(p.Heat, 10)
 			if e.rng.Intn(20) == 0 && addScar(p, ScarCorporateBackdoor) {
-				scarMessages = append(scarMessages, fmt.Sprintf("%s acquired %s", p.Nick, ScarCorporateBackdoor))
+				scarMessages = append(scarMessages, fmt.Sprintf("%s acquired %s", p.DisplayName(), ScarCorporateBackdoor))
 			}
 		}
 		applyCityEventGear(event, p)
@@ -1220,7 +1253,7 @@ func (e *Engine) startContractLocked(now time.Time) (string, bool, error) {
 	for _, index := range order[:count] {
 		p := candidates[index]
 		contract.Participants = append(contract.Participants, p.Identity)
-		nicks = append(nicks, p.Nick)
+		nicks = append(nicks, p.DisplayName())
 	}
 	e.world.Contract = contract
 	return fmt.Sprintf("[GRID] CONTRACT: %s in %s. Stay linked for %s. Team: %s.", contract.Title, contract.District, formatDuration(e.rules.ContractDuration), strings.Join(nicks, ", ")), true, nil
@@ -1361,6 +1394,13 @@ func (p *Player) EquipmentRating() int {
 		total += item.Rating
 	}
 	return total
+}
+
+func (p *Player) DisplayName() string {
+	if p.Alias != "" {
+		return p.Alias
+	}
+	return p.Nick
 }
 
 func (p *Player) NextLevelIn(rules Rules) time.Duration {
