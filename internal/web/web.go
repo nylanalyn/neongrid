@@ -15,13 +15,15 @@ import (
 type Server struct {
 	engine  *game.Engine
 	channel string
+	ready   func() bool
 	tmpl    *template.Template
 }
 
-func New(engine *game.Engine, channel string) *Server {
+func New(engine *game.Engine, channel string, ready func() bool) *Server {
 	return &Server{
 		engine:  engine,
 		channel: channel,
+		ready:   ready,
 		tmpl:    template.Must(template.New("index").Parse(indexTemplate)),
 	}
 }
@@ -60,6 +62,12 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if !s.ready() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("irc unavailable\n"))
+			return
+		}
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	return mux

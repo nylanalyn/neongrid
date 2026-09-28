@@ -45,7 +45,7 @@ func main() {
 	defer stop()
 	bot := irc.New(cfg, engine, log.Default())
 	if cfg.WebListen != "" {
-		observer := web.New(engine, cfg.Channel)
+		observer := web.New(engine, cfg.Channel, bot.Ready)
 		log.Printf("web observer listening on http://%s", cfg.WebListen)
 		go func() {
 			if err := observer.Run(ctx, cfg.WebListen); err != nil {

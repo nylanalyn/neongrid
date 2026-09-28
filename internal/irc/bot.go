@@ -109,6 +109,13 @@ func (b *Bot) Announce(message string) {
 	}
 }
 
+func (b *Bot) Ready() bool {
+	b.mu.RLock()
+	client := b.client
+	b.mu.RUnlock()
+	return client != nil && client.IsConnected() && client.IsInChannel(b.cfg.Channel)
+}
+
 func (b *Bot) newClient(legacyTLS bool, connected chan<- struct{}) *girc.Client {
 	ircConfig := girc.Config{
 		Server: b.cfg.Server, Port: b.cfg.Port, SSL: b.cfg.TLS,

@@ -53,7 +53,8 @@ func TestHandlerRendersReadOnlyObserver(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := New(e, "#neongrid")
+	ready := true
+	server := New(e, "#neongrid", func() bool { return ready })
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "http://observer/", nil))
 	if recorder.Code != 200 {
@@ -70,6 +71,12 @@ func TestHandlerRendersReadOnlyObserver(t *testing.T) {
 	server.Handler().ServeHTTP(health, httptest.NewRequest("GET", "http://observer/healthz", nil))
 	if health.Code != 200 || health.Body.String() != "ok\n" {
 		t.Fatalf("health response = %d %q", health.Code, health.Body.String())
+	}
+	ready = false
+	health = httptest.NewRecorder()
+	server.Handler().ServeHTTP(health, httptest.NewRequest("GET", "http://observer/healthz", nil))
+	if health.Code != 503 || health.Body.String() != "irc unavailable\n" {
+		t.Fatalf("disconnected health response = %d %q", health.Code, health.Body.String())
 	}
 	readOnly := httptest.NewRecorder()
 	server.Handler().ServeHTTP(readOnly, httptest.NewRequest("POST", "http://observer/", nil))
