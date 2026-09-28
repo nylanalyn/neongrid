@@ -234,6 +234,12 @@ func worldSummary(world game.WorldState, now time.Time) string {
 	if world.FactionSwapUntil.After(now) {
 		parts = append(parts, "SYSTEM CRASH active · one faction respec available for "+durationText(world.FactionSwapUntil.Sub(now)))
 	}
+	if world.Raid != nil {
+		parts = append(parts, "BLACKWALL ALERT · "+world.Raid.ICE+" hits "+world.Raid.District+" in "+durationText(world.Raid.ResolvesAt.Sub(now)))
+	}
+	if world.FactionWeek.Champion != "" {
+		parts = append(parts, "Faction champion · "+game.FactionLabel(world.FactionWeek.Champion))
+	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " | ")
 	}

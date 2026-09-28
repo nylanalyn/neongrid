@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -18,10 +19,13 @@ type Store struct{ db *sql.DB }
 const currentSchemaVersion = 6
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, err
 	}
+	// The engine serialises all game writes, so a single connection avoids
+	// SQLITE_BUSY between pooled connections without costing throughput.
+	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err := s.init(); err != nil {
 		db.Close()
@@ -31,6 +35,20 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// dsn applies connection pragmas to every connection the pool opens: WAL with
+// NORMAL sync keeps the per-tick saves cheap, and busy_timeout rides out
+// brief locks from external readers such as the sqlite3 shell or backups.
+func dsn(path string) string {
+	pragmas := "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	if strings.Contains(path, "?") {
+		return path + "&" + pragmas
+	}
+	if !strings.HasPrefix(path, "file:") {
+		path = "file:" + path
+	}
+	return path + "?" + pragmas
+}
 
 func (s *Store) init() error {
 	tx, err := s.db.Begin()
@@ -143,7 +161,8 @@ func (s *Store) save(exec interface {
 	if err != nil {
 		return err
 	}
-	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles, LastFactionSwapAt: p.LastFactionSwapAt, Alias: p.Alias})
+	history, err := json.Marshal(playerHistory{Scars: p.Scars, Titles: p.Titles, LastFactionSwapAt: p.LastFactionSwapAt, Alias: p.Alias, ChosenTitle: p.ChosenTitle, Stats: p.Stats,
+		Stance: p.Stance, Rivals: p.Rivals, StreakSince: p.StreakSince, StreakDays: p.StreakDays})
 	if err != nil {
 		return err
 	}
@@ -174,6 +193,18 @@ func (s *Store) ClaimRareItem(name, owner string) (bool, error) {
 	}
 	count, err := result.RowsAffected()
 	return count == 1, err
+}
+
+// ReleaseRareItem returns a burned-out artifact to the drop pool.
+func (s *Store) ReleaseRareItem(name string) error {
+	_, err := s.db.Exec(`DELETE FROM rare_items WHERE name = ?`, name)
+	return err
+}
+
+// TransferRareItem records a stolen artifact's new owner.
+func (s *Store) TransferRareItem(name, owner string) error {
+	_, err := s.db.Exec(`UPDATE rare_items SET owner_identity = ? WHERE name = ?`, owner, name)
+	return err
 }
 
 func (s *Store) MigrateGuest(guestKey, accountKey, account, nick string) (*game.Player, error) {
@@ -244,14 +275,15 @@ func (s *Store) LoadWorldState() (game.WorldState, error) {
 		if err := rows.Scan(&key, &value); err != nil {
 			return state, err
 		}
-		if key == "recent_events" {
-			if err := json.Unmarshal([]byte(value), &state.RecentEvents); err != nil {
-				return state, fmt.Errorf("world state %s: %w", key, err)
-			}
-			continue
-		}
-		if key == "active_contract" {
-			if err := json.Unmarshal([]byte(value), &state.Contract); err != nil {
+		if target, ok := map[string]any{
+			"recent_events":   &state.RecentEvents,
+			"active_contract": &state.Contract,
+			"faction_week":    &state.FactionWeek,
+			"raid":            &state.Raid,
+			"bulletin":        &state.Bulletin,
+			"dead_drop":       &state.DeadDrop,
+		}[key]; ok {
+			if err := json.Unmarshal([]byte(value), target); err != nil {
 				return state, fmt.Errorf("world state %s: %w", key, err)
 			}
 			continue
@@ -277,28 +309,32 @@ func (s *Store) LoadWorldState() (game.WorldState, error) {
 }
 
 func (s *Store) SaveWorldState(state game.WorldState) error {
-	recentEvents, err := json.Marshal(state.RecentEvents)
-	if err != nil {
-		return err
-	}
-	contract, err := json.Marshal(state.Contract)
-	if err != nil {
-		return err
+	blobs := map[string]string{}
+	for key, value := range map[string]any{
+		"recent_events":   state.RecentEvents,
+		"active_contract": state.Contract,
+		"faction_week":    state.FactionWeek,
+		"raid":            state.Raid,
+		"bulletin":        state.Bulletin,
+		"dead_drop":       state.DeadDrop,
+	} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		blobs[key] = string(data)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for key, value := range map[string]string{
-		"pirate_until":            fmt.Sprint(unix(state.PirateUntil)),
-		"next_city_event_at":      fmt.Sprint(unix(state.NextCityEventAt)),
-		"faction_swap_until":      fmt.Sprint(unix(state.FactionSwapUntil)),
-		"faction_swap_started_at": fmt.Sprint(unix(state.FactionSwapStartedAt)),
-		"next_faction_swap_at":    fmt.Sprint(unix(state.NextFactionSwapAt)),
-		"recent_events":           string(recentEvents),
-		"active_contract":         string(contract),
-	} {
+	blobs["pirate_until"] = fmt.Sprint(unix(state.PirateUntil))
+	blobs["next_city_event_at"] = fmt.Sprint(unix(state.NextCityEventAt))
+	blobs["faction_swap_until"] = fmt.Sprint(unix(state.FactionSwapUntil))
+	blobs["faction_swap_started_at"] = fmt.Sprint(unix(state.FactionSwapStartedAt))
+	blobs["next_faction_swap_at"] = fmt.Sprint(unix(state.NextFactionSwapAt))
+	for key, value := range blobs {
 		if _, err := tx.Exec(`INSERT INTO world_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 			return err
 		}
@@ -309,10 +345,16 @@ func (s *Store) SaveWorldState(state game.WorldState) error {
 type scanner interface{ Scan(...any) error }
 
 type playerHistory struct {
-	Scars             []string  `json:"scars"`
-	Titles            []string  `json:"titles"`
-	LastFactionSwapAt time.Time `json:"last_faction_swap_at,omitempty"`
-	Alias             string    `json:"alias,omitempty"`
+	Scars             []string         `json:"scars"`
+	Titles            []string         `json:"titles"`
+	LastFactionSwapAt time.Time        `json:"last_faction_swap_at,omitempty"`
+	Alias             string           `json:"alias,omitempty"`
+	ChosenTitle       string           `json:"chosen_title,omitempty"`
+	Stats             game.RunnerStats `json:"stats"`
+	Stance            string           `json:"stance,omitempty"`
+	Rivals            map[string]int   `json:"rivals,omitempty"`
+	StreakSince       time.Time        `json:"streak_since,omitempty"`
+	StreakDays        int              `json:"streak_days,omitempty"`
 }
 
 func scanPlayer(row scanner) (*game.Player, error) {
@@ -345,6 +387,9 @@ func scanPlayer(row scanner) (*game.Player, error) {
 	}
 	p.Scars, p.Titles, p.Alias = savedHistory.Scars, savedHistory.Titles, savedHistory.Alias
 	p.LastFactionSwapAt = savedHistory.LastFactionSwapAt
+	p.ChosenTitle, p.Stats = savedHistory.ChosenTitle, savedHistory.Stats
+	p.Stance, p.Rivals = savedHistory.Stance, savedHistory.Rivals
+	p.StreakSince, p.StreakDays = savedHistory.StreakSince, savedHistory.StreakDays
 	return &p, nil
 }
 
@@ -390,6 +435,28 @@ func merge(guest, account *game.Player) *game.Player {
 	}
 	result.Scars = appendUnique(result.Scars, guest.Scars...)
 	result.Titles = appendUnique(result.Titles, guest.Titles...)
+	if result.ChosenTitle == "" {
+		result.ChosenTitle = guest.ChosenTitle
+	}
+	result.Stats.IceWins += guest.Stats.IceWins
+	result.Stats.CollisionWins += guest.Stats.CollisionWins
+	result.Stats.Contracts += guest.Stats.Contracts
+	result.Stats.Uniques += guest.Stats.Uniques
+	result.Stats.Thefts += guest.Stats.Thefts
+	result.Stats.DeadDrops += guest.Stats.DeadDrops
+	result.Stats.RaidWins += guest.Stats.RaidWins
+	result.Stats.LongestStreak = max(result.Stats.LongestStreak, guest.Stats.LongestStreak)
+	if result.Stance == "" {
+		result.Stance = guest.Stance
+	}
+	// The guest is the live connection, so its streak is the current one.
+	result.StreakSince, result.StreakDays = guest.StreakSince, guest.StreakDays
+	for identity, bouts := range guest.Rivals {
+		if result.Rivals == nil {
+			result.Rivals = map[string]int{}
+		}
+		result.Rivals[identity] += bouts
+	}
 	return result
 }
 

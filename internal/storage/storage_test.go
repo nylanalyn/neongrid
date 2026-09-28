@@ -187,3 +187,132 @@ func TestRareItemClaimsAreUnique(t *testing.T) {
 		t.Fatalf("duplicate claim = %v, %v", claimed, err)
 	}
 }
+
+func TestOpenUsesWAL(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var mode string
+	var timeout int
+	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "wal" || timeout != 5000 {
+		t.Fatalf("journal_mode=%q busy_timeout=%d", mode, timeout)
+	}
+}
+
+func TestReleasedRareItemCanBeClaimedAgain(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err = store.ClaimRareItem("Blackglass Deck", "acct:first"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReleaseRareItem("Blackglass Deck"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimRareItem("Blackglass Deck", "acct:second"); err != nil || !claimed {
+		t.Fatalf("claim after release = %v, %v", claimed, err)
+	}
+}
+
+func TestStatsChosenTitleAndBurnOutPersist(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	p := &game.Player{
+		Identity: "acct:runner", Account: "runner", Nick: "runner", Level: 9,
+		Titles: []string{"ICEbreaker", "Relic Hunter"}, ChosenTitle: "ICEbreaker",
+		Stats:     game.RunnerStats{IceWins: 7, CollisionWins: 2, Contracts: 1, Uniques: 1},
+		Equipment: map[string]game.Item{game.SlotDeck: {Name: "Blackglass Deck", Rating: 6, Unique: true, BreaksAt: 14}},
+	}
+	if err = store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadAll()
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("load = %v, %v", loaded, err)
+	}
+	got := loaded[0]
+	if got.ChosenTitle != "ICEbreaker" || got.Stats != p.Stats || got.Equipment[game.SlotDeck].BreaksAt != 14 {
+		t.Fatalf("loaded runner = %+v", got)
+	}
+}
+
+func TestNewWorldStateRoundTrips(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	at := time.Unix(1_700_000_000, 0)
+	want := game.WorldState{
+		FactionWeek: game.FactionWeek{Scores: map[string]int{game.FactionChrome: 4}, EndsAt: at, Champion: game.FactionNomad},
+		DeadDrop:    "K7QXM",
+		Raid:        &game.Raid{ICE: "KRAKEN v3", District: game.DistrictFloodline, ResolvesAt: at},
+		Bulletin:    game.Bulletin{NextAt: at, Climbs: map[string]int{"acct:a": 2}, CollisionWins: map[string]int{"acct:b": 1}},
+	}
+	if err = store.SaveWorldState(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LoadWorldState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FactionWeek.Scores[game.FactionChrome] != 4 || !got.FactionWeek.EndsAt.Equal(at) || got.FactionWeek.Champion != game.FactionNomad ||
+		got.DeadDrop != "K7QXM" || got.Raid == nil || got.Raid.ICE != "KRAKEN v3" || !got.Raid.ResolvesAt.Equal(at) ||
+		!got.Bulletin.NextAt.Equal(at) || got.Bulletin.Climbs["acct:a"] != 2 || got.Bulletin.CollisionWins["acct:b"] != 1 {
+		t.Fatalf("world state = %+v", got)
+	}
+	if err = store.SaveWorldState(game.WorldState{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = store.LoadWorldState(); err != nil || got.Raid != nil || got.DeadDrop != "" {
+		t.Fatalf("cleared world state = %+v, %v", got, err)
+	}
+}
+
+func TestNewRunnerFieldsRoundTripAndTransfer(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "neongrid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	since := time.Unix(1_700_000_000, 0)
+	p := &game.Player{
+		Identity: "acct:runner", Account: "runner", Nick: "runner", Level: 3, Equipment: map[string]game.Item{},
+		Stance: game.StanceHot, Rivals: map[string]int{"acct:other": 4}, StreakSince: since, StreakDays: 2,
+		Stats: game.RunnerStats{Thefts: 1, DeadDrops: 2, RaidWins: 3, LongestStreak: 5},
+	}
+	if err = store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadAll()
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("load = %v, %v", loaded, err)
+	}
+	got := loaded[0]
+	if got.Stance != game.StanceHot || got.Rivals["acct:other"] != 4 || !got.StreakSince.Equal(since) || got.StreakDays != 2 || got.Stats != p.Stats {
+		t.Fatalf("loaded runner = %+v", got)
+	}
+	if _, err = store.ClaimRareItem("Blackglass Deck", "acct:runner"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.TransferRareItem("Blackglass Deck", "acct:thief"); err != nil {
+		t.Fatal(err)
+	}
+	var owner string
+	if err = store.db.QueryRow("SELECT owner_identity FROM rare_items WHERE name = ?", "Blackglass Deck").Scan(&owner); err != nil || owner != "acct:thief" {
+		t.Fatalf("owner = %q, %v", owner, err)
+	}
+}

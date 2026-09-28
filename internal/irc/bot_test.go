@@ -27,7 +27,7 @@ func TestNamesNick(t *testing.T) {
 }
 
 func TestFreeCommand(t *testing.T) {
-	for _, command := range []string{"!help", "!status", "!runner", "!top now", "!gear", "!world", "!events", "!alias chicken-licker"} {
+	for _, command := range []string{"!help", "!status", "!runner", "!top now", "!gear", "!world", "!events", "!alias chicken-licker", "!title", "!title Street Samurai", "!stance hot"} {
 		if !freeCommand(command, game.ActivityChat) {
 			t.Errorf("freeCommand(%q) = false", command)
 		}
@@ -142,5 +142,85 @@ func TestIsAdminRejectsBlankAccount(t *testing.T) {
 	}
 	if !b.isAdmin("gridadmin") {
 		t.Fatal("configured admin was rejected")
+	}
+}
+
+func TestIsNetsplit(t *testing.T) {
+	for _, reason := range []string{"*.net *.split", "hub.example.net leaf.example.org"} {
+		if !isNetsplit(reason) {
+			t.Errorf("isNetsplit(%q) = false", reason)
+		}
+	}
+	for _, reason := range []string{"Quit: *.net *.split", "Ping timeout: 240 seconds", "a.b a.b", "going to bed", "", "example.net"} {
+		if isNetsplit(reason) {
+			t.Errorf("isNetsplit(%q) = true", reason)
+		}
+	}
+}
+
+func TestSASLUsesConfiguredAccount(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.NickServ.Password = "hunter2"
+	if mech, ok := New(cfg, nil, nil).saslMech().(*girc.SASLPlain); !ok || mech.User != cfg.Nick || mech.Pass != "hunter2" {
+		t.Fatalf("default SASL mech = %#v", mech)
+	}
+	cfg.NickServ.Account = "gridbot"
+	if mech := New(cfg, nil, nil).saslMech().(*girc.SASLPlain); mech.User != "gridbot" {
+		t.Fatalf("SASL user = %q, want gridbot", mech.User)
+	}
+	cfg.NickServ.SASL = false
+	if mech := New(cfg, nil, nil).saslMech(); mech != nil {
+		t.Fatal("SASL was used after being disabled")
+	}
+	cfg.NickServ.SASL, cfg.NickServ.Password = true, ""
+	if mech := New(cfg, nil, nil).saslMech(); mech != nil {
+		t.Fatal("SASL was used without a password")
+	}
+}
+
+func TestGearLineShowsBurnOut(t *testing.T) {
+	got := gearLine(&game.Player{Equipment: map[string]game.Item{
+		game.SlotDeck: {Name: "Blackglass Deck", Unique: true, BreaksAt: 14},
+	}})
+	if want := "[GRID] loadout | deck: Blackglass Deck [UNIQUE, burns out at Rep 14]"; got != want {
+		t.Fatalf("gearLine() = %q, want %q", got, want)
+	}
+}
+
+func TestTitleLineShowsOneTitleFirst(t *testing.T) {
+	p := &game.Player{Level: 10, Titles: []string{"ICEbreaker", "Nine-Day Signal", "Ghost of Floodline"}}
+	want := "[GRID] showing Nine-Day Signal (3 earned) | also: ICEbreaker, Ghost of Floodline | !title <name> to switch, !title auto for your best."
+	if got := titleLine(p); got != want {
+		t.Fatalf("titleLine() = %q, want %q", got, want)
+	}
+	if got := titleLine(&game.Player{}); !strings.HasPrefix(got, "[GRID] no titles earned yet") {
+		t.Fatalf("empty titleLine() = %q", got)
+	}
+}
+
+func TestStatusLineShowsStanceAndStreak(t *testing.T) {
+	got := statusLine(&game.Player{Nick: "rumi", Level: 3, Stance: game.StanceCold, StreakDays: 4}, config.Defaults().Rules())
+	if !strings.Contains(got, "faction unaffiliated | stance cold | streak 4d | title") {
+		t.Fatalf("status line = %q", got)
+	}
+	if got := statusLine(&game.Player{Nick: "rumi", Level: 3}, config.Defaults().Rules()); strings.Contains(got, "stance") || strings.Contains(got, "streak") {
+		t.Fatalf("default status line shows empty extras: %q", got)
+	}
+}
+
+func TestWorldLineShowsRaidDeadDropAndFactionWeek(t *testing.T) {
+	now := time.Unix(6000, 0)
+	got := worldLine(game.WorldState{
+		PirateUntil: now.Add(time.Minute), DeadDrop: "K7QXM",
+		Raid:        &game.Raid{ICE: "KRAKEN v3", District: game.DistrictFloodline, ResolvesAt: now.Add(10 * time.Minute)},
+		FactionWeek: game.FactionWeek{Scores: map[string]int{game.FactionChrome: 3}, EndsAt: now.Add(48 * time.Hour), Champion: game.FactionNomad},
+	}, now)
+	for _, want := range []string{"BLACKWALL: KRAKEN v3 hits Floodline in 10m0s", "dead drop unclaimed", "faction week: Chrome 3 · Ghostline 0 · Nomad 0, ends in 48h0m0s; reigning Nomad"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("world line %q does not contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "K7QXM") {
+		t.Fatal("world line leaked the dead drop code")
 	}
 }

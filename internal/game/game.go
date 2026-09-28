@@ -25,6 +25,8 @@ const (
 	ActivityPart
 	ActivityQuit
 	ActivityKick
+	// ActivityNetsplit is a server-side disconnect: no penalty, Heat, or contract failure.
+	ActivityNetsplit
 )
 
 type Activity int
@@ -78,6 +80,9 @@ type Item struct {
 	Name   string `json:"name"`
 	Rating int    `json:"rating"`
 	Unique bool   `json:"unique,omitempty"`
+	// BreaksAt is the Rep level at which a unique burns out and returns to
+	// the drop pool.
+	BreaksAt int `json:"breaks_at,omitempty"`
 }
 
 type Player struct {
@@ -102,6 +107,30 @@ type Player struct {
 	Equipment         map[string]Item
 	Scars             []string
 	Titles            []string
+	// ChosenTitle is the earned title the runner picked with !title; empty
+	// shows the most prestigious one.
+	ChosenTitle string
+	Stats       RunnerStats
+	// Stance is "", StanceHot, or StanceCold; see SetStance.
+	Stance string
+	// Rivals counts collisions against each opponent identity.
+	Rivals map[string]int
+	// StreakSince is when the current unbroken link began; StreakDays is how
+	// many full days of it have already paid out.
+	StreakSince time.Time
+	StreakDays  int
+}
+
+// RunnerStats counts milestones that titles are awarded for.
+type RunnerStats struct {
+	IceWins       int `json:"ice_wins,omitempty"`
+	CollisionWins int `json:"collision_wins,omitempty"`
+	Contracts     int `json:"contracts,omitempty"`
+	Uniques       int `json:"uniques,omitempty"`
+	Thefts        int `json:"thefts,omitempty"`
+	DeadDrops     int `json:"dead_drops,omitempty"`
+	RaidWins      int `json:"raid_wins,omitempty"`
+	LongestStreak int `json:"longest_streak,omitempty"`
 }
 
 type WorldState struct {
@@ -112,6 +141,12 @@ type WorldState struct {
 	NextFactionSwapAt    time.Time
 	RecentEvents         []string
 	Contract             *Contract
+	FactionWeek          FactionWeek
+	// DeadDrop is the clean code of the unclaimed dead drop hidden in the
+	// current pirate frequency, if any.
+	DeadDrop string
+	Raid     *Raid
+	Bulletin Bulletin
 }
 
 type Contract struct {
@@ -120,6 +155,8 @@ type Contract struct {
 	Participants []string
 	EndsAt       time.Time
 	Failed       bool
+	// DroppedBy names the participant whose disconnect failed the contract.
+	DroppedBy string
 }
 
 type cityEventKind string
@@ -135,17 +172,17 @@ const (
 
 type cityEvent struct {
 	kind           cityEventKind
-	text           string
 	progressChange int64
 }
 
+// Announcement text for each kind lives in cityEventTexts (flavor.go).
 var cityEvents = []cityEvent{
-	{kind: cityEventBlackout, text: "BLACKOUT rolls across the lower stacks.", progressChange: -60},
-	{kind: cityEventCorporateSweep, text: "CORPORATE SWEEP detected. Keep your signatures cold.", progressChange: -90},
-	{kind: cityEventDataLeak, text: "DATA LEAK: fresh intel is spilling onto the Grid.", progressChange: 120},
-	{kind: cityEventGangWar, text: "GANG WAR erupts beneath the maglev lines.", progressChange: -120},
-	{kind: cityEventBounty, text: "BOUNTY contract posted; every faction is watching.", progressChange: 90},
-	{kind: cityEventMegacorpRun, text: "MEGACORP RUN authorized. The payout is probably a trap.", progressChange: 180},
+	{kind: cityEventBlackout, progressChange: -60},
+	{kind: cityEventCorporateSweep, progressChange: -90},
+	{kind: cityEventDataLeak, progressChange: 120},
+	{kind: cityEventGangWar, progressChange: -120},
+	{kind: cityEventBounty, progressChange: 90},
+	{kind: cityEventMegacorpRun, progressChange: 180},
 }
 
 type Rules struct {
@@ -171,6 +208,9 @@ type Rules struct {
 	CollisionInterval         time.Duration
 	PirateDuration            time.Duration
 	GuestRetention            time.Duration
+	// ArtifactOfflineRelease is how long a runner can be offline before their
+	// uniques return to the drop pool.
+	ArtifactOfflineRelease time.Duration
 }
 
 type Repository interface {
@@ -178,6 +218,8 @@ type Repository interface {
 	Save(*Player) error
 	Delete(string) error
 	ClaimRareItem(name, owner string) (bool, error)
+	ReleaseRareItem(name string) error
+	TransferRareItem(name, owner string) error
 	MigrateGuest(guestKey, accountKey, account, nick string) (*Player, error)
 	Top(limit int) ([]*Player, error)
 	LoadWorldState() (WorldState, error)
@@ -191,7 +233,14 @@ type Engine struct {
 	rng   *rand.Rand
 	world WorldState
 	users map[string]*Player
+	// pending holds level-up and title announcements produced outside Tick
+	// (commands, the observer, collisions) until the next Tick sends them.
+	pending []string
+	// missingSince tracks connected runners absent from the channel roster.
+	missingSince map[string]time.Time
 }
+
+const maxPendingAnnouncements = 50
 
 func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, error) {
 	if repo == nil {
@@ -230,6 +279,9 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 	if rules.GuestRetention < time.Hour {
 		rules.GuestRetention = 14 * 24 * time.Hour
 	}
+	if rules.ArtifactOfflineRelease < time.Hour {
+		rules.ArtifactOfflineRelease = 7 * 24 * time.Hour
+	}
 
 	users := make(map[string]*Player)
 	players, err := repo.LoadAll()
@@ -245,6 +297,13 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 		p.LastProgressAt = now
 		p.LastHeatAt = now
 		ensureEquipment(p)
+		for slot, item := range p.Equipment {
+			// Uniques from before burn-out existed get a normal remaining lifespan.
+			if item.Unique && item.BreaksAt == 0 {
+				item.BreaksAt = p.Level + uniqueLifeLevels(rng)
+				p.Equipment[slot] = item
+			}
+		}
 		if !validDistrict(p.District) {
 			p.District = DistrictNeonMarket
 		}
@@ -275,12 +334,20 @@ func New(repo Repository, rules Rules, rng *rand.Rand, now time.Time) (*Engine, 
 		world.NextFactionSwapAt = nextFactionSwapAt(now, rng)
 		worldChanged = true
 	}
+	if world.FactionWeek.EndsAt.IsZero() {
+		world.FactionWeek.EndsAt = now.Add(factionWeekLength)
+		worldChanged = true
+	}
+	if world.Bulletin.NextAt.IsZero() {
+		world.Bulletin.NextAt = now.Add(bulletinInterval)
+		worldChanged = true
+	}
 	if worldChanged {
 		if err := repo.SaveWorldState(world); err != nil {
 			return nil, err
 		}
 	}
-	return &Engine{repo: repo, rules: rules, rng: rng, world: world, users: users}, nil
+	return &Engine{repo: repo, rules: rules, rng: rng, world: world, users: users, missingSince: make(map[string]time.Time)}, nil
 }
 
 func AccountKey(account string) string { return "acct:" + strings.ToLower(strings.TrimSpace(account)) }
@@ -303,9 +370,12 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 	p := e.users[identity]
 	contractChanged := false
 	if !guest {
-		if guestPlayer := e.users[GuestKey(nick)]; guestPlayer != nil {
+		if guestPlayer := e.migratableGuestLocked(nick, account); guestPlayer != nil {
 			guestKey := guestPlayer.Identity
 			e.advanceLocked(guestPlayer, now)
+			if err := e.repo.Save(guestPlayer); err != nil {
+				return nil, err
+			}
 			migrated, err := e.repo.MigrateGuest(guestPlayer.Identity, identity, account, nick)
 			if err != nil {
 				return nil, err
@@ -324,6 +394,12 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 		e.users[identity] = p
 	} else if p.Connected {
 		e.advanceLocked(p, now)
+	} else {
+		e.staggerTimersLocked(p, now)
+		// A rejoin soon after a netsplit or bot outage keeps the streak alive.
+		if p.StreakSince.IsZero() || now.Sub(p.LastSeenAt) > streakGrace {
+			p.StreakSince, p.StreakDays = now, 0
+		}
 	}
 	p.Nick = nick
 	p.Account = account
@@ -344,44 +420,43 @@ func (e *Engine) joinLocked(identity, nick, account string, now time.Time) (*Pla
 	return clonePlayer(p), nil
 }
 
+// staggerTimersLocked pushes timers that came due while a runner was offline
+// to a random point later in their interval, so a mass rejoin after a
+// netsplit or restart does not fire everyone's encounter, drift, and
+// collision in the same tick.
+func (e *Engine) staggerTimersLocked(p *Player, now time.Time) {
+	stagger := func(at *time.Time, interval time.Duration) {
+		if at.IsZero() || at.After(now) {
+			return
+		}
+		*at = now.Add(interval/4 + time.Duration(e.rng.Int63n(int64(interval*3/4)+1)))
+	}
+	stagger(&p.NextEncounterAt, e.rules.EncounterInterval)
+	stagger(&p.NextDistrictAt, e.rules.DistrictInterval)
+	stagger(&p.NextCollisionAt, e.rules.CollisionInterval)
+}
+
 func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 	if strings.TrimSpace(account) == "" {
 		return nil, errors.New("account is required")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	guest := e.users[GuestKey(nick)]
-	if guest == nil {
-		guest = e.findLocked("", nick)
-	}
 	identity := AccountKey(account)
 	contractChanged := false
-	if guest != nil && guest.Guest {
-		guestKey := guest.Identity
-		e.advanceLocked(guest, now)
-		migrated, err := e.repo.MigrateGuest(guestKey, identity, account, nick)
-		if err != nil {
+	if p := e.findConnectedLocked(nick); p != nil && !p.Guest && p.Identity != identity {
+		// The user switched NickServ accounts. The previous account keeps its
+		// runner; it just goes offline instead of being re-keyed to the new one.
+		e.advanceLocked(p, now)
+		p.Connected = false
+		p.LastSeenAt = now
+		contractChanged = e.markContractFailedLocked(p.Identity)
+		if err := e.repo.Save(p); err != nil {
 			return nil, err
 		}
-		delete(e.users, guestKey)
-		e.users[identity] = migrated
-		contractChanged = e.rekeyContractParticipantLocked(guestKey, identity)
-		guest = migrated
 	}
-	if guest == nil {
-		return e.joinLocked(identity, nick, account, now)
-	}
-	e.advanceLocked(guest, now)
-	guest.Identity = identity
-	guest.Account = account
-	guest.Guest = false
-	guest.Nick = nick
-	guest.Connected = true
-	guest.LastSeenAt = now
-	guest.LastProgressAt = now
-	guest.LastHeatAt = now
-	e.users[identity] = guest
-	if err := e.repo.Save(guest); err != nil {
+	p, err := e.joinLocked(identity, nick, account, now)
+	if err != nil {
 		return nil, err
 	}
 	if contractChanged {
@@ -389,7 +464,23 @@ func (e *Engine) Bind(nick, account string, now time.Time) (*Player, error) {
 			return nil, err
 		}
 	}
-	return clonePlayer(guest), nil
+	return p, nil
+}
+
+// migratableGuestLocked returns the guest runner that provably belongs to the
+// user now identified as account: the guest currently connected under nick,
+// or the offline guest record for a nick that matches the account name.
+func (e *Engine) migratableGuestLocked(nick, account string) *Player {
+	if p := e.findConnectedLocked(nick); p != nil {
+		if p.Guest {
+			return p
+		}
+		return nil
+	}
+	if p := e.users[GuestKey(nick)]; p != nil && p.Guest && strings.EqualFold(strings.TrimSpace(nick), strings.TrimSpace(account)) {
+		return p
+	}
+	return nil
 }
 
 func (e *Engine) SetAlias(identity, nick, alias string, now time.Time) (*Player, error) {
@@ -403,8 +494,45 @@ func (e *Engine) SetAlias(identity, nick, alias string, now time.Time) (*Player,
 	if p == nil {
 		return nil, ErrRunnerNotFound
 	}
+	if alias != "" {
+		for _, other := range e.users {
+			if other != p && (strings.EqualFold(other.Alias, alias) || strings.EqualFold(other.Nick, alias)) {
+				return nil, errors.New("that name is already in use by another runner")
+			}
+		}
+	}
 	e.advanceLocked(p, now)
 	p.Alias = alias
+	p.LastSeenAt = now
+	if err := e.repo.Save(p); err != nil {
+		return nil, err
+	}
+	return clonePlayer(p), nil
+}
+
+// SetTitle picks which earned title a runner shows; "" or "auto" returns to
+// showing the most prestigious one.
+func (e *Engine) SetTitle(identity, nick, title string, now time.Time) (*Player, error) {
+	title = strings.TrimSpace(title)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	p := e.findLocked(identity, nick)
+	if p == nil {
+		return nil, ErrRunnerNotFound
+	}
+	chosen := ""
+	if title != "" && !strings.EqualFold(title, "auto") {
+		for _, earned := range p.Titles {
+			if strings.EqualFold(earned, title) {
+				chosen = earned
+			}
+		}
+		if chosen == "" {
+			return nil, errors.New("you have not earned that title")
+		}
+	}
+	e.advanceLocked(p, now)
+	p.ChosenTitle = chosen
 	p.LastSeenAt = now
 	if err := e.repo.Save(p); err != nil {
 		return nil, err
@@ -487,7 +615,11 @@ func (e *Engine) Disconnect(nick string, kind Activity, now time.Time) (int64, e
 	p.LastSeenAt = now
 	p.LastProgressAt = now
 	p.LastHeatAt = now
-	contractChanged := e.markContractFailedLocked(p.Identity)
+	contractChanged := false
+	if kind != ActivityNetsplit {
+		contractChanged = e.markContractFailedLocked(p.Identity)
+		p.StreakSince, p.StreakDays = time.Time{}, 0
+	}
 	if err := e.repo.Save(p); err != nil {
 		return 0, err
 	}
@@ -499,10 +631,12 @@ func (e *Engine) Disconnect(nick string, kind Activity, now time.Time) (int64, e
 	return penalty, nil
 }
 
+// DisconnectAll marks every runner offline when the bot itself loses the
+// channel. It is not the runners' fault, so it does not fail contracts; a
+// participant who is still missing when the contract resolves fails it then.
 func (e *Engine) DisconnectAll(now time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	contractChanged := false
 	for _, p := range e.users {
 		if !p.Connected {
 			continue
@@ -511,15 +645,51 @@ func (e *Engine) DisconnectAll(now time.Time) error {
 		p.Connected = false
 		p.LastProgressAt = now
 		p.LastHeatAt = now
+		if err := e.repo.Save(p); err != nil {
+			return err
+		}
+	}
+	clear(e.missingSince)
+	return nil
+}
+
+// Reconcile compares connected runners with the channel roster. A runner
+// missing for longer than grace (a missed QUIT, PART, or nick change) is
+// dropped without penalty so it cannot keep accruing progress while gone.
+func (e *Engine) Reconcile(present func(nick string) bool, grace time.Duration, now time.Time) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	contractChanged := false
+	for key, p := range e.users {
+		if !p.Connected || present(p.Nick) {
+			delete(e.missingSince, key)
+			continue
+		}
+		since, ok := e.missingSince[key]
+		if !ok {
+			e.missingSince[key] = now
+			continue
+		}
+		if now.Sub(since) < grace {
+			continue
+		}
+		delete(e.missingSince, key)
+		e.advanceLocked(p, now)
+		p.Connected = false
+		p.LastSeenAt = now
+		p.StreakSince, p.StreakDays = time.Time{}, 0
 		contractChanged = e.markContractFailedLocked(p.Identity) || contractChanged
 		if err := e.repo.Save(p); err != nil {
 			return err
 		}
 	}
-	if contractChanged {
-		if err := e.repo.SaveWorldState(e.world); err != nil {
-			return err
+	for key := range e.missingSince {
+		if p := e.users[key]; p == nil || !p.Connected {
+			delete(e.missingSince, key)
 		}
+	}
+	if contractChanged {
+		return e.repo.SaveWorldState(e.world)
 	}
 	return nil
 }
@@ -533,10 +703,12 @@ func (e *Engine) Rename(oldNick, newNick string, now time.Time) (int64, error) {
 	}
 	oldKey := p.Identity
 	newKey := GuestKey(newNick)
-	if p.Guest && newKey != oldKey {
-		if existing := e.users[newKey]; existing != nil && existing != p {
-			return 0, errors.New("nickname is already claimed by another guest runner")
-		}
+	rekey := p.Guest && newKey != oldKey
+	if existing := e.users[newKey]; rekey && existing != nil && existing != p {
+		// Another guest record owns the new nick's key. Keep this runner under
+		// its current key but follow the new nick, so later QUIT/PART events
+		// still find it and the other guest's progress is untouched.
+		rekey = false
 	}
 	e.advanceLocked(p, now)
 	penalty := PenaltySeconds(p.Level, ActivityNick, 0, e.rules)
@@ -544,7 +716,7 @@ func (e *Engine) Rename(oldNick, newNick string, now time.Time) (int64, error) {
 	p.Heat = addHeat(p.Heat, 4)
 	p.Nick = newNick
 	contractChanged := false
-	if p.Guest {
+	if rekey {
 		p.Identity = newKey
 		delete(e.users, oldKey)
 		contractChanged = e.rekeyContractParticipantLocked(oldKey, newKey)
@@ -598,6 +770,8 @@ func (e *Engine) Top(limit int, now time.Time) ([]*Player, error) {
 func (e *Engine) Tick(now time.Time) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// Announcements queued since the last tick follow this tick's world events.
+	carried := e.takePendingLocked()
 	var messages []string
 	if message, err := e.factionSwapTickLocked(now); err != nil {
 		return nil, err
@@ -608,6 +782,16 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 		return nil, err
 	} else if message != "" {
 		messages = append(messages, message)
+	}
+	if message, err := e.resolveRaidLocked(now); err != nil {
+		return nil, err
+	} else if message != "" {
+		messages = append(messages, message)
+	}
+	for _, message := range []string{e.deadDropExpiryLocked(now), e.factionWeekTickLocked(now), e.bulletinTickLocked(now)} {
+		if message != "" {
+			messages = append(messages, message)
+		}
 	}
 	if !e.world.NextCityEventAt.IsZero() && !now.Before(e.world.NextCityEventAt) {
 		message, err := e.cityEventLocked(now)
@@ -620,6 +804,7 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			return nil, err
 		}
 	}
+	messages = append(messages, carried...)
 	for key, p := range e.users {
 		if p.Guest && !p.Connected && !p.LastSeenAt.IsZero() && now.Sub(p.LastSeenAt) > e.rules.GuestRetention {
 			if err := e.repo.Delete(key); err != nil {
@@ -629,15 +814,24 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			continue
 		}
 		if !p.Connected {
+			if !p.LastSeenAt.IsZero() && now.Sub(p.LastSeenAt) > e.rules.ArtifactOfflineRelease {
+				released, err := e.releaseAbandonedUniquesLocked(p)
+				if err != nil {
+					return nil, err
+				}
+				messages = append(messages, released...)
+			}
 			continue
 		}
-		oldLevel := p.Level
 		e.advanceLocked(p, now)
+		if message := e.streakTickLocked(p, now); message != "" {
+			messages = append(messages, message)
+		}
 		if !p.NextDistrictAt.IsZero() && !now.Before(p.NextDistrictAt) {
 			oldDistrict := p.District
 			p.District = e.randomDistrictLocked(oldDistrict)
 			p.NextDistrictAt = now.Add(e.rules.DistrictInterval)
-			messages = append(messages, fmt.Sprintf("[GRID] %s drifted from %s to %s.", p.DisplayName(), oldDistrict, p.District))
+			messages = append(messages, "[GRID] "+render(e.pick(driftTemplates), "runner", p.DisplayName(), "from", oldDistrict, "to", p.District))
 		}
 		if !p.NextEncounterAt.IsZero() && !now.Before(p.NextEncounterAt) {
 			message, err := e.encounterLocked(p)
@@ -648,14 +842,12 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 			p.NextEncounterAt = now.Add(e.rules.EncounterInterval)
 			e.advanceLocked(p, now)
 		}
-		for level := oldLevel + 1; level <= p.Level; level++ {
-			slot := equipmentSlots[(level-2)%len(equipmentSlots)]
-			if item := p.Equipment[slot]; item.Unique {
-				messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. UNIQUE %s retained.", p.DisplayName(), level, item.Name))
-				continue
-			}
-			messages = append(messages, fmt.Sprintf("[GRID] %s reached Rep %d. %s upgraded.", p.DisplayName(), level, slot))
+		messages = append(messages, e.takePendingLocked()...)
+		burnouts, err := e.burnOutUniquesLocked(p)
+		if err != nil {
+			return nil, err
 		}
+		messages = append(messages, burnouts...)
 		if err := e.repo.Save(p); err != nil {
 			return nil, err
 		}
@@ -665,6 +857,7 @@ func (e *Engine) Tick(now time.Time) ([]string, error) {
 	} else if message != "" {
 		messages = append(messages, message)
 	}
+	messages = append(messages, e.takePendingLocked()...)
 	if err := e.rememberLocked(messages...); err != nil {
 		return nil, err
 	}
@@ -702,8 +895,7 @@ func nextFactionSwapAt(now time.Time, rng *rand.Rand) time.Time {
 func (e *Engine) ForcePirate(now time.Time) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.world.PirateUntil = now.Add(e.rules.PirateDuration)
-	message := fmt.Sprintf("[GRID] PIRATE FREQUENCY: transmissions are safe for %s.", formatDuration(e.rules.PirateDuration))
+	message := e.openPirateFrequencyLocked(now)
 	if err := e.rememberLocked(message); err != nil {
 		return "", err
 	}
@@ -721,16 +913,13 @@ func (e *Engine) World() WorldState {
 func (e *Engine) Snapshot(now time.Time) ([]*Player, WorldState, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// ponytail: snapshot uses the engine's existing global lock; add a read model if public traffic needs higher throughput.
+	// Advance copies only: page views must not write to the database or
+	// consume level-up announcements that belong to the next Tick.
 	players := make([]*Player, 0, len(e.users))
 	for _, p := range e.users {
-		if p.Connected {
-			e.advanceLocked(p, now)
-			if err := e.repo.Save(p); err != nil {
-				return nil, WorldState{}, err
-			}
-		}
-		players = append(players, clonePlayer(p))
+		view := clonePlayer(p)
+		advancePlayer(view, now, e.rules)
+		players = append(players, view)
 	}
 	return players, cloneWorld(e.world), nil
 }
@@ -793,11 +982,15 @@ func (r Rules) LevelDuration(level int) int64 {
 func newPlayer(identity, nick, account string, now time.Time) *Player {
 	return &Player{
 		Identity: identity, Account: account, Nick: nick, Guest: account == "", Level: 1,
-		LastProgressAt: now, LastSeenAt: now, NextEncounterAt: now, LastHeatAt: now, District: DistrictNeonMarket,
+		LastProgressAt: now, LastSeenAt: now, NextEncounterAt: now, LastHeatAt: now, District: DistrictNeonMarket, StreakSince: now,
 		Equipment: make(map[string]Item),
 	}
 }
 
+// findLocked resolves the runner behind an IRC event. Only one user can hold
+// a nick at a time, so nick matches consider connected runners only; an
+// offline runner is reachable by its identity key, or by its guest key when
+// the caller has no account.
 func (e *Engine) findLocked(identity, nick string) *Player {
 	if identity != "" {
 		if p := e.users[identity]; p != nil {
@@ -809,8 +1002,20 @@ func (e *Engine) findLocked(identity, nick string) *Player {
 			}
 		}
 	}
+	if p := e.findConnectedLocked(nick); p != nil {
+		return p
+	}
+	if identity == "" {
+		if p := e.users[GuestKey(nick)]; p != nil && p.Guest {
+			return p
+		}
+	}
+	return nil
+}
+
+func (e *Engine) findConnectedLocked(nick string) *Player {
 	for _, p := range e.users {
-		if strings.EqualFold(p.Nick, nick) {
+		if p.Connected && strings.EqualFold(p.Nick, nick) {
 			return p
 		}
 	}
@@ -818,10 +1023,37 @@ func (e *Engine) findLocked(identity, nick string) *Player {
 }
 
 func (e *Engine) advanceLocked(p *Player, now time.Time) {
+	before := p.Level
+	e.queueLocked(advancePlayer(p, now, e.rules)...)
+	if gained := p.Level - before; gained > 0 {
+		e.noteBulletinLocked(&e.world.Bulletin.Climbs, p.Identity, gained)
+	}
+}
+
+func (e *Engine) updateTitlesLocked(p *Player) {
+	e.queueLocked(updateTitles(p)...)
+}
+
+func (e *Engine) queueLocked(messages ...string) {
+	e.pending = append(e.pending, messages...)
+	if len(e.pending) > maxPendingAnnouncements {
+		e.pending = e.pending[len(e.pending)-maxPendingAnnouncements:]
+	}
+}
+
+func (e *Engine) takePendingLocked() []string {
+	messages := e.pending
+	e.pending = nil
+	return messages
+}
+
+// advancePlayer accrues connected time, Heat decay, level-ups, and titles, and
+// returns the announcements those changes deserve.
+func advancePlayer(p *Player, now time.Time, rules Rules) []string {
 	if !p.Connected {
 		p.LastProgressAt = now
 		p.LastHeatAt = now
-		return
+		return nil
 	}
 	if p.LastProgressAt.IsZero() {
 		p.LastProgressAt = now
@@ -829,76 +1061,129 @@ func (e *Engine) advanceLocked(p *Player, now time.Time) {
 	if p.LastHeatAt.IsZero() {
 		p.LastHeatAt = now
 	}
+	// A connected runner is being seen, so offline timers (guest pruning,
+	// artifact release) start from the last tick even after a bot crash.
+	if now.After(p.LastSeenAt) {
+		p.LastSeenAt = now
+	}
 	elapsed := int64(now.Sub(p.LastProgressAt) / time.Second)
 	if elapsed > 0 {
 		p.ProgressSeconds += elapsed
 		p.LastProgressAt = p.LastProgressAt.Add(time.Duration(elapsed) * time.Second)
 	}
-	if elapsedHeat := int64(now.Sub(p.LastHeatAt) / e.rules.HeatDecayInterval); elapsedHeat > 0 {
+	if elapsedHeat := int64(now.Sub(p.LastHeatAt) / rules.HeatDecayInterval); elapsedHeat > 0 {
 		p.Heat = clampHeat(p.Heat - int(elapsedHeat))
-		p.LastHeatAt = p.LastHeatAt.Add(time.Duration(elapsedHeat) * e.rules.HeatDecayInterval)
+		p.LastHeatAt = p.LastHeatAt.Add(time.Duration(elapsedHeat) * rules.HeatDecayInterval)
 	}
-	for p.ProgressSeconds >= e.rules.LevelDuration(p.Level) {
-		p.ProgressSeconds -= e.rules.LevelDuration(p.Level)
+	var messages []string
+	startLevel, lastGear := p.Level, ""
+	for p.ProgressSeconds >= rules.LevelDuration(p.Level) {
+		p.ProgressSeconds -= rules.LevelDuration(p.Level)
 		p.Level++
-		tier := 1 + (p.Level-1)/3
+		ensureEquipment(p)
+		tier := gearTier(p.Level)
 		slot := equipmentSlots[(p.Level-2)%len(equipmentSlots)]
-		if item, ok := p.Equipment[slot]; !ok || !item.Unique {
-			p.Equipment[slot] = Item{Name: equipmentName(slot, tier), Rating: tier}
+		if item, ok := p.Equipment[slot]; ok && item.Unique {
+			lastGear = fmt.Sprintf("UNIQUE %s retained.", item.Name)
+			continue
 		}
+		item := Item{Name: equipmentName(slot, tier), Rating: tier}
+		p.Equipment[slot] = item
+		lastGear = fmt.Sprintf("Installed %s.", item.Name)
 	}
-	updateTitles(p)
+	switch gained := p.Level - startLevel; {
+	case gained == 1:
+		messages = append(messages, fmt.Sprintf("[GRID] %s %s Rep %d. %s", p.DisplayName(), levelUpVerbs[p.Level%len(levelUpVerbs)], p.Level, lastGear))
+	case gained > 1:
+		messages = append(messages, fmt.Sprintf("[GRID] %s surged to Rep %d (+%d). Latest: %s", p.DisplayName(), p.Level, gained, lastGear))
+	}
+	return append(messages, updateTitles(p)...)
 }
 
 type rareItem struct {
-	name   string
-	slot   string
-	rating int
+	name string
+	slot string
+	// bonus is how many tiers above on-level gear the artifact rates.
+	bonus int
 }
 
 var rareItems = []rareItem{
-	{name: "Blackglass Deck", slot: SlotDeck, rating: 8},
-	{name: "Saint-9 Reflex Coil", slot: SlotNeuralImplant, rating: 7},
-	{name: "Prototype Mantis Rig", slot: SlotWeaponRig, rating: 9},
-	{name: "Aegis Nullplate", slot: SlotArmorPlating, rating: 8},
-	{name: "Whisperbyte Scout", slot: SlotDrone, rating: 7},
+	{name: "Blackglass Deck", slot: SlotDeck, bonus: 3},
+	{name: "Saint-9 Reflex Coil", slot: SlotNeuralImplant, bonus: 2},
+	{name: "Prototype Mantis Rig", slot: SlotWeaponRig, bonus: 4},
+	{name: "Aegis Nullplate", slot: SlotArmorPlating, bonus: 3},
+	{name: "Whisperbyte Scout", slot: SlotDrone, bonus: 2},
 }
 
-const rareLootChancePercent = 5
+const (
+	rareLootChancePercent = 5
+	// Uniques last uniqueMinLife to uniqueMinLife+uniqueLifeRange-1 levels.
+	uniqueMinLife   = 4
+	uniqueLifeRange = 5
+	// iceBaseChance is the percent chance to beat ICE with on-level gear.
+	iceBaseChance = 65
+)
 
-func (e *Engine) encounterLocked(p *Player) (string, error) {
-	rating := p.Level + p.EquipmentRating()
+func uniqueLifeLevels(rng *rand.Rand) int { return uniqueMinLife + rng.Intn(uniqueLifeRange) }
+
+// gearTier is the Mk rating of standard gear installed at level.
+func gearTier(level int) int { return 1 + (level-1)/3 }
+
+// expectedGearRating is the total rating of a standard loadout at level: each
+// slot holds the gear from the most recent level-up that upgraded it.
+func expectedGearRating(level int) int {
+	total := 0
+	for l := level; l >= 2 && l > level-len(equipmentSlots); l-- {
+		total += gearTier(l)
+	}
+	return total
+}
+
+// iceWinChance is the percent chance to beat ICE. ICE is built for the
+// runner's level, so what matters is gear against an on-level loadout, plus
+// build, location, and Heat.
+func iceWinChance(p *Player, champion string) int {
+	chance := iceBaseChance + 3*(p.EquipmentRating()-expectedGearRating(p.Level)) + stanceOdds(p)
+	if champion != "" && p.Faction == champion {
+		chance += championEdge
+	}
 	if hasScar(p, ScarGhostSignal) {
-		rating++
+		chance += 5
 	}
 	if hasScar(p, ScarBurnedOptic) {
-		rating--
+		chance -= 5
 	}
 	if p.Faction == FactionGhostline {
-		rating += 2
+		chance += 10
 	}
-	rating += districtEncounterBonus(p.District)
-	rating += p.Heat / 20
-	threat := 1 + e.rng.Intn(max(2, rating+5+p.Heat/10))
-	if rating >= threat {
+	chance += 5 * districtEncounterBonus(p.District)
+	chance -= p.Heat / 5
+	return max(10, min(95, chance))
+}
+
+func (e *Engine) encounterLocked(p *Player) (string, error) {
+	ice, place := e.pick(iceNames), e.placeIn(p.District)
+	if e.rng.Intn(100) < iceWinChance(p, e.world.FactionWeek.Champion) {
+		p.Stats.IceWins++
+		e.scoreFactionLocked(p, 1)
 		gain := max64(10, e.rules.LevelDuration(p.Level)/20)
 		if p.Faction == FactionChrome {
 			gain = gain * 3 / 2
 		}
-		p.ProgressSeconds += gain
-		p.Heat = addHeat(p.Heat, 2)
+		p.ProgressSeconds += stanceReward(p, gain)
+		p.Heat = addHeat(p.Heat, stanceHeat(p, 2))
 		scar := ""
 		if e.rng.Intn(25) == 0 && addScar(p, ScarGhostSignal) {
 			scar = " Ghost Signal acquired."
 		}
-		item, err := e.rareLootLocked(p)
+		item, err := e.rareLootLocked(p, "")
 		if err != nil {
 			return "", err
 		}
 		if item != nil {
-			return fmt.Sprintf("[GRID] %s survived an ICE breach and recovered UNIQUE %s.%s", p.DisplayName(), item.Name, scar), nil
+			return "[GRID] " + render(e.pick(iceUniqueTemplates), "runner", p.DisplayName(), "ice", ice, "place", place, "item", item.Name) + scar, nil
 		}
-		return fmt.Sprintf("[GRID] %s survived an ICE breach and secured a data shard.%s", p.DisplayName(), scar), nil
+		return "[GRID] " + render(e.pick(iceWinTemplates), "runner", p.DisplayName(), "ice", ice, "place", place) + scar, nil
 	}
 	loss := max64(5, e.rules.LevelDuration(p.Level)/30)
 	if p.Faction == FactionNomad {
@@ -908,12 +1193,12 @@ func (e *Engine) encounterLocked(p *Player) (string, error) {
 		loss = loss * 3 / 2
 	}
 	p.ProgressSeconds -= loss
-	p.Heat = addHeat(p.Heat, 8)
+	p.Heat = addHeat(p.Heat, stanceHeat(p, 8))
 	scar := ""
 	if e.rng.Intn(12) == 0 && addScar(p, ScarBurnedOptic) {
 		scar = " Burned Optic acquired."
 	}
-	return fmt.Sprintf("[GRID] %s hit hostile ICE and lost time escaping the trace.%s", p.DisplayName(), scar), nil
+	return "[GRID] " + render(e.pick(iceLossTemplates), "runner", p.DisplayName(), "ice", ice, "place", place) + scar, nil
 }
 
 func (e *Engine) collisionLocked(now time.Time) (string, error) {
@@ -927,16 +1212,12 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 		return "", nil
 	}
 	initiator := due[e.rng.Intn(len(due))]
-	var opponents []*Player
-	for _, p := range e.users {
-		if p.Connected && p != initiator {
-			opponents = append(opponents, p)
-		}
-	}
-	if len(opponents) == 0 {
+	opponent := e.pickOpponentLocked(initiator)
+	if opponent == nil {
 		return "", nil
 	}
-	opponent := opponents[e.rng.Intn(len(opponents))]
+	bouts := recordBout(initiator, opponent)
+	rivalry := bouts >= rivalryBouts && topRival(initiator) == opponent.Identity && topRival(opponent) == initiator.Identity
 	winner, loser := initiator, opponent
 	if collisionPower(opponent)+e.rng.Intn(5) > collisionPower(initiator)+e.rng.Intn(5) {
 		winner, loser = opponent, initiator
@@ -946,24 +1227,24 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 	loss := collisionLoss(loser, max64(20, e.rules.LevelDuration(loser.Level)/24))
 	winner.Heat = addHeat(winner.Heat, 3)
 	loser.Heat = addHeat(loser.Heat, 5)
+	winner.Stats.CollisionWins++
+	e.scoreFactionLocked(winner, 2)
+	e.noteBulletinLocked(&e.world.Bulletin.CollisionWins, winner.Identity, 1)
 	scar := ""
 	if e.rng.Intn(20) == 0 && addScar(winner, ScarSyntheticAdrenalGland) {
 		scar = " Synthetic Adrenal Gland acquired."
 	}
-	message := ""
-	switch e.rng.Intn(4) {
+	kind := e.rng.Intn(4)
+	switch kind {
 	case 0:
 		winner.ProgressSeconds += gain
 		loser.ProgressSeconds -= loss
-		message = fmt.Sprintf("[GRID] COLLISION: %s cracked %s's deck and siphoned %s.%s", winner.DisplayName(), loser.DisplayName(), formatDuration(time.Duration(gain)*time.Second), scar)
 	case 1:
 		winner.ProgressSeconds += gain * 2
 		loser.ProgressSeconds -= max64(15, loss/2)
-		message = fmt.Sprintf("[GRID] COLLISION: %s won a dead-drop race against %s.%s", winner.DisplayName(), loser.DisplayName(), scar)
 	case 2:
 		winner.ProgressSeconds += max64(15, gain/2)
 		loser.ProgressSeconds -= loss * 2
-		message = fmt.Sprintf("[GRID] COLLISION: %s hunted %s through the %s.%s", winner.DisplayName(), loser.DisplayName(), loser.District, scar)
 	case 3:
 		winner.ProgressSeconds += gain
 		loser.ProgressSeconds -= loss
@@ -974,10 +1255,21 @@ func (e *Engine) collisionLocked(now time.Time) (string, error) {
 			}
 			loser.Equipment[SlotDrone] = item
 		}
-		message = fmt.Sprintf("[GRID] COLLISION: %s jammed %s's drone feed and took the shard.%s", winner.DisplayName(), loser.DisplayName(), scar)
 	}
-	updateTitles(winner)
-	updateTitles(loser)
+	prefix := "[GRID] COLLISION: "
+	if rivalry {
+		prefix = fmt.Sprintf("[GRID] RIVALRY, round %d: ", bouts)
+	}
+	message := prefix + render(e.pick(collisionTemplates[kind]),
+		"winner", winner.DisplayName(), "loser", loser.DisplayName(), "gain", formatDuration(time.Duration(gain)*time.Second),
+		"district", loser.District, "place", e.placeIn(loser.District)) + scar
+	if stolen, err := e.stealUniqueLocked(winner, loser); err != nil {
+		return "", err
+	} else if stolen != "" {
+		message += fmt.Sprintf(" %s walked off with %s's UNIQUE %s!", winner.DisplayName(), loser.DisplayName(), stolen)
+	}
+	e.updateTitlesLocked(winner)
+	e.updateTitlesLocked(loser)
 	winner.NextCollisionAt = now.Add(e.rules.CollisionInterval)
 	loser.NextCollisionAt = now.Add(e.rules.CollisionInterval)
 	if err := e.repo.Save(winner); err != nil {
@@ -1019,13 +1311,19 @@ func collisionLoss(p *Player, loss int64) int64 {
 	return loss
 }
 
-func (e *Engine) rareLootLocked(p *Player) (*Item, error) {
+// rareLootLocked rolls the unique drop table. A drop rates above on-level
+// gear and burns out a few levels later. exclude names an artifact that may
+// not drop, such as one that just burned out.
+func (e *Engine) rareLootLocked(p *Player, exclude string) (*Item, error) {
 	if e.rng.Intn(100) >= rareLootChance(p) {
 		return nil, nil
 	}
 	start := e.rng.Intn(len(rareItems))
 	for i := range rareItems {
 		candidate := rareItems[(start+i)%len(rareItems)]
+		if candidate.name == exclude {
+			continue
+		}
 		claimed, err := e.repo.ClaimRareItem(candidate.name, p.Identity)
 		if err != nil {
 			return nil, err
@@ -1033,16 +1331,90 @@ func (e *Engine) rareLootLocked(p *Player) (*Item, error) {
 		if !claimed {
 			continue
 		}
-		item := &Item{Name: candidate.name, Rating: candidate.rating, Unique: true}
+		item := &Item{Name: candidate.name, Rating: gearTier(p.Level) + candidate.bonus, Unique: true, BreaksAt: p.Level + uniqueLifeLevels(e.rng)}
 		ensureEquipment(p)
 		p.Equipment[candidate.slot] = *item
+		p.Stats.Uniques++
+		e.updateTitlesLocked(p)
 		return item, nil
 	}
 	return nil, nil
 }
 
+// retireUniqueLocked returns the unique in slot to the drop pool and fits
+// standard gear for the runner's current level in its place.
+func (e *Engine) retireUniqueLocked(p *Player, slot string) (Item, error) {
+	if err := e.repo.ReleaseRareItem(p.Equipment[slot].Name); err != nil {
+		return Item{}, err
+	}
+	replacement := Item{Name: equipmentName(slot, gearTier(p.Level)), Rating: gearTier(p.Level)}
+	p.Equipment[slot] = replacement
+	return replacement, nil
+}
+
+// releaseAbandonedUniquesLocked frees artifacts held by a runner who has been
+// offline too long, so the few that exist keep circulating.
+func (e *Engine) releaseAbandonedUniquesLocked(p *Player) ([]string, error) {
+	var messages []string
+	for _, slot := range equipmentSlots {
+		item := p.Equipment[slot]
+		if !item.Unique {
+			continue
+		}
+		if _, err := e.retireUniqueLocked(p, slot); err != nil {
+			return nil, err
+		}
+		messages = append(messages, fmt.Sprintf("[GRID] %s's UNIQUE %s went dark while its owner was off the Grid. It's back on the black market.", p.DisplayName(), item.Name))
+	}
+	if len(messages) > 0 {
+		if err := e.repo.Save(p); err != nil {
+			return nil, err
+		}
+	}
+	return messages, nil
+}
+
+// burnOutUniquesLocked retires uniques that reached their burn-out level:
+// the artifact returns to the drop pool, the slot gets standard on-level
+// gear, and the runner rolls the drop table again.
+func (e *Engine) burnOutUniquesLocked(p *Player) ([]string, error) {
+	var messages []string
+	for _, slot := range equipmentSlots {
+		item := p.Equipment[slot]
+		if !item.Unique || item.BreaksAt == 0 || p.Level < item.BreaksAt {
+			continue
+		}
+		replacement, err := e.retireUniqueLocked(p, slot)
+		if err != nil {
+			return nil, err
+		}
+		message := fmt.Sprintf("[GRID] %s's UNIQUE %s burned out and slipped back onto the black market. Fitted %s.", p.DisplayName(), item.Name, replacement.Name)
+		salvage, err := e.rareLootLocked(p, item.Name)
+		if err != nil {
+			return nil, err
+		}
+		if salvage != nil {
+			message += fmt.Sprintf(" The salvage run turned up UNIQUE %s!", salvage.Name)
+		}
+		messages = append(messages, message)
+	}
+	if len(messages) > 0 {
+		if err := e.repo.Save(p); err != nil {
+			return nil, err
+		}
+	}
+	return append(messages, e.takePendingLocked()...), nil
+}
+
 func rareLootChance(p *Player) int {
-	return min(100, rareLootChancePercent+p.Heat/10)
+	chance := rareLootChancePercent + p.Heat/10
+	switch p.Stance {
+	case StanceHot:
+		chance *= 2
+	case StanceCold:
+		chance /= 2
+	}
+	return min(100, chance)
 }
 
 func addScar(p *Player, scar string) bool {
@@ -1072,22 +1444,64 @@ func addTitle(p *Player, title string) bool {
 	return true
 }
 
-func updateTitles(p *Player) {
-	if p.Level >= 5 {
-		addTitle(p, "ICEbreaker")
-	}
-	if p.Level >= 10 {
-		addTitle(p, "Nine-Day Signal")
-	}
-	if p.Heat >= 75 {
-		addTitle(p, "Corporate Liability")
-	}
-	if p.District == DistrictFloodline && p.Level >= 3 {
-		addTitle(p, "Ghost of Floodline")
-	}
+type titleRule struct {
+	name   string
+	earned func(*Player) bool
 }
 
+// titleRules run from least to most prestigious. Runners collect every title
+// they earn but show only one: the most prestigious, or the one they chose.
+var titleRules = []titleRule{
+	{"Ghost of Floodline", func(p *Player) bool { return p.District == DistrictFloodline && p.Level >= 3 }},
+	{"ICEbreaker", func(p *Player) bool { return p.Level >= 5 }},
+	{"Corporate Liability", func(p *Player) bool { return p.Heat >= 75 }},
+	{"Relic Hunter", func(p *Player) bool { return p.Stats.Uniques >= 1 }},
+	{"Cat Burglar", func(p *Player) bool { return p.Stats.Thefts >= 1 }},
+	{"Static Whisperer", func(p *Player) bool { return p.Stats.DeadDrops >= 3 }},
+	{"Street Samurai", func(p *Player) bool { return p.Stats.CollisionWins >= 10 }},
+	{"Deniable Asset", func(p *Player) bool { return p.Stats.Contracts >= 3 }},
+	{"Wallbreaker", func(p *Player) bool { return p.Stats.RaidWins >= 3 }},
+	{"ICE Surfer", func(p *Player) bool { return p.Stats.IceWins >= 25 }},
+	{"Chrome Saint", func(p *Player) bool { return p.Level >= 50 }},
+	{"Blood Feud", func(p *Player) bool { return p.Rivals[topRival(p)] >= 10 }},
+	{"Ghost Protocol", func(p *Player) bool { return p.Stats.LongestStreak >= 7 }},
+	{"Black Market Royalty", func(p *Player) bool { return p.Stats.Uniques >= 3 }},
+	{"Nine-Day Signal", func(p *Player) bool { return p.Level >= 100 }},
+	{"Blackwall Veteran", func(p *Player) bool { return p.Stats.IceWins >= 100 }},
+	{"Neon Ghost", func(p *Player) bool { return p.Level >= 150 }},
+	{"Ghost in the Machine", func(p *Player) bool { return p.Level >= 250 }},
+}
+
+// updateTitles awards milestone titles and returns an announcement for each new one.
+func updateTitles(p *Player) []string {
+	var messages []string
+	for _, rule := range titleRules {
+		if rule.earned(p) && addTitle(p, rule.name) {
+			messages = append(messages, fmt.Sprintf("[GRID] %s earned the title %s.", p.DisplayName(), rule.name))
+		}
+	}
+	return messages
+}
+
+func hasTitle(p *Player, title string) bool {
+	for _, existing := range p.Titles {
+		if existing == title {
+			return true
+		}
+	}
+	return false
+}
+
+// CurrentTitle is the one title shown for a runner.
 func (p *Player) CurrentTitle() string {
+	if p.ChosenTitle != "" && hasTitle(p, p.ChosenTitle) {
+		return p.ChosenTitle
+	}
+	for i := len(titleRules) - 1; i >= 0; i-- {
+		if hasTitle(p, titleRules[i].name) {
+			return titleRules[i].name
+		}
+	}
 	if len(p.Titles) == 0 {
 		return ""
 	}
@@ -1185,8 +1599,12 @@ func (e *Engine) rememberLocked(messages ...string) error {
 
 func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 	if e.rng.Intn(10) == 0 {
-		e.world.PirateUntil = now.Add(e.rules.PirateDuration)
-		return fmt.Sprintf("[GRID] PIRATE FREQUENCY: for %s, channel transmissions are safe.", formatDuration(e.rules.PirateDuration)), nil
+		return e.openPirateFrequencyLocked(now), nil
+	}
+	if e.rng.Intn(8) == 0 {
+		if message, started := e.startRaidLocked(now); started {
+			return message, nil
+		}
 	}
 	event := cityEvents[e.rng.Intn(len(cityEvents))]
 	if event.kind == cityEventMegacorpRun {
@@ -1217,12 +1635,12 @@ func (e *Engine) cityEventLocked(now time.Time) (string, error) {
 				p.NextEncounterAt = nextEncounter
 			}
 		}
-		updateTitles(p)
+		e.updateTitlesLocked(p)
 		if err := e.repo.Save(p); err != nil {
 			return "", err
 		}
 	}
-	message := fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", event.text, formatProgressChange(event.progressChange))
+	message := fmt.Sprintf("[GRID] CITY EVENT: %s Active runners %s.", e.pick(cityEventTexts[event.kind]), formatProgressChange(event.progressChange))
 	if len(scarMessages) > 0 {
 		message += " " + strings.Join(scarMessages, "; ") + "."
 	}
@@ -1245,7 +1663,7 @@ func (e *Engine) startContractLocked(now time.Time) (string, bool, error) {
 	order := e.rng.Perm(len(candidates))
 	count := min(len(candidates), e.rules.ContractMaxParticipants)
 	contract := &Contract{
-		Title:    "Helix Dynamics breach",
+		Title:    e.pick(contractCorps) + " " + e.pick(contractJobs),
 		District: districts[e.rng.Intn(len(districts))],
 		EndsAt:   now.Add(e.rules.ContractDuration),
 	}
@@ -1261,7 +1679,8 @@ func (e *Engine) startContractLocked(now time.Time) (string, bool, error) {
 
 func (e *Engine) resolveContractLocked(now time.Time) (string, error) {
 	contract := e.world.Contract
-	if contract == nil || now.Before(contract.EndsAt) {
+	// A dropped signal ends the contract on the next tick instead of at the deadline.
+	if contract == nil || (now.Before(contract.EndsAt) && !contract.Failed) {
 		return "", nil
 	}
 	success := !contract.Failed
@@ -1281,6 +1700,9 @@ func (e *Engine) resolveContractLocked(now time.Time) (string, error) {
 		if success {
 			p.ProgressSeconds += max64(60, e.rules.LevelDuration(p.Level)/6)
 			p.Heat = addHeat(p.Heat, 3)
+			p.Stats.Contracts++
+			e.scoreFactionLocked(p, 3)
+			e.updateTitlesLocked(p)
 		} else {
 			p.ProgressSeconds -= max64(120, e.rules.LevelDuration(p.Level)/4)
 			p.Heat = addHeat(p.Heat, 10)
@@ -1291,9 +1713,12 @@ func (e *Engine) resolveContractLocked(now time.Time) (string, error) {
 	}
 	e.world.Contract = nil
 	if success {
-		return fmt.Sprintf("[GRID] CONTRACT COMPLETE: %s cleared. The team secured its payout.", contract.Title), nil
+		return fmt.Sprintf("[GRID] CONTRACT COMPLETE: the %s is done and nobody blinked. The team splits the payout.", contract.Title), nil
 	}
-	return fmt.Sprintf("[GRID] CONTRACT FAILED: %s collapsed after a team signal dropped. The breach cost the team time.", contract.Title), nil
+	if contract.DroppedBy != "" {
+		return fmt.Sprintf("[GRID] CONTRACT FAILED: the %s collapsed when %s's signal dropped mid-run. The whole team eats the setback.", contract.Title, contract.DroppedBy), nil
+	}
+	return fmt.Sprintf("[GRID] CONTRACT FAILED: the %s collapsed; not everyone was linked at the deadline. The whole team eats the setback.", contract.Title), nil
 }
 
 func (e *Engine) markContractFailedLocked(identity string) bool {
@@ -1303,6 +1728,9 @@ func (e *Engine) markContractFailedLocked(identity string) bool {
 	for _, participant := range e.world.Contract.Participants {
 		if participant == identity {
 			e.world.Contract.Failed = true
+			if p := e.users[identity]; p != nil {
+				e.world.Contract.DroppedBy = p.DisplayName()
+			}
 			return true
 		}
 	}
@@ -1436,6 +1864,7 @@ func clonePlayer(p *Player) *Player {
 	}
 	copy.Scars = append([]string(nil), p.Scars...)
 	copy.Titles = append([]string(nil), p.Titles...)
+	copy.Rivals = cloneCounts(p.Rivals)
 	return &copy
 }
 
@@ -1447,6 +1876,13 @@ func cloneWorld(world WorldState) WorldState {
 		contract.Participants = append([]string(nil), world.Contract.Participants...)
 		copy.Contract = &contract
 	}
+	if world.Raid != nil {
+		raid := *world.Raid
+		copy.Raid = &raid
+	}
+	copy.FactionWeek.Scores = cloneCounts(world.FactionWeek.Scores)
+	copy.Bulletin.Climbs = cloneCounts(world.Bulletin.Climbs)
+	copy.Bulletin.CollisionWins = cloneCounts(world.Bulletin.CollisionWins)
 	return copy
 }
 

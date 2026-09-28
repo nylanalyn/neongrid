@@ -3,6 +3,9 @@ port: 6697
 tls: true
 # Set true for legacy servers requiring TLS 1.2 RSA/CBC compatibility.
 tls12_only: false
+# Retry with that legacy suite after a failed modern handshake. Off by default:
+# a network attacker can force the downgrade. Prefer tls12_only when needed.
+tls_legacy_fallback: false
 nick: neongrid
 user: neongrid
 name: NeonGrid runner daemon
@@ -15,8 +18,13 @@ admin_accounts:
 
 nickserv:
   name: NickServ
+  # Account to authenticate as; defaults to nick.
+  account: ''
   # Prefer NEONGRID_NICKSERV_PASSWORD in the environment.
   password: ''
+  # Authenticate with SASL PLAIN when the server offers it; otherwise fall back
+  # to messaging identify_command to NickServ.
+  sasl: true
   identify_command: IDENTIFY
 
 progression:
@@ -45,6 +53,8 @@ events:
   contract_hours: 8
   contract_participants: 4
   collision_minutes: 90
+  # Uniques held by a runner offline this long return to the drop pool.
+  artifact_offline_days: 7
 
 guest_retention_days: 14
 reconnect_seconds: 10

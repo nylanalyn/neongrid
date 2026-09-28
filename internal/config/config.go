@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -17,6 +18,7 @@ type Config struct {
 	Port               int               `yaml:"port"`
 	TLS                bool              `yaml:"tls"`
 	TLS12Only          bool              `yaml:"tls12_only"`
+	TLSLegacyFallback  bool              `yaml:"tls_legacy_fallback"`
 	Nick               string            `yaml:"nick"`
 	User               string            `yaml:"user"`
 	Name               string            `yaml:"name"`
@@ -33,8 +35,12 @@ type Config struct {
 }
 
 type NickServConfig struct {
-	Name            string `yaml:"name"`
-	Password        string `yaml:"password"`
+	Name     string `yaml:"name"`
+	Account  string `yaml:"account"`
+	Password string `yaml:"password"`
+	// SASL authenticates during connection registration when the server
+	// offers it; IDENTIFY through Name is used only when it does not.
+	SASL            bool   `yaml:"sasl"`
 	IdentifyCommand string `yaml:"identify_command"`
 }
 
@@ -66,6 +72,7 @@ type EventConfig struct {
 	ContractHours        int `yaml:"contract_hours"`
 	ContractParticipants int `yaml:"contract_participants"`
 	CollisionMinutes     int `yaml:"collision_minutes"`
+	ArtifactOfflineDays  int `yaml:"artifact_offline_days"`
 }
 
 func Defaults() Config {
@@ -73,14 +80,14 @@ func Defaults() Config {
 		Server: "irc.libera.chat", Port: 6697, TLS: true,
 		Nick:    "neongrid",
 		Channel: "#neongrid", Database: "neongrid.db",
-		NickServ:    NickServConfig{Name: "NickServ", IdentifyCommand: "IDENTIFY"},
+		NickServ:    NickServConfig{Name: "NickServ", SASL: true, IdentifyCommand: "IDENTIFY"},
 		Progression: ProgressionConfig{BaseMinutes: 30, LevelStepMinutes: 2},
 		Penalty: PenaltyConfig{
 			SpeechBaseSeconds: 30, SpeechPerLevelSeconds: 5, SpeechPerCharacterSeconds: 1,
 			ActionBaseSeconds: 45, ActionPerLevelSeconds: 7, ActionPerCharacterSeconds: 1,
 			NickSeconds: 90, PartSeconds: 180, QuitSeconds: 240, KickSeconds: 360,
 		},
-		Events:             EventConfig{TickSeconds: 30, EncounterMinutes: 60, CityEventMinutes: 120, PirateMinutes: 5, DistrictHours: 6, HeatDecayMinutes: 30, ContractHours: 8, ContractParticipants: 4, CollisionMinutes: 90},
+		Events:             EventConfig{TickSeconds: 30, EncounterMinutes: 60, CityEventMinutes: 120, PirateMinutes: 5, DistrictHours: 6, HeatDecayMinutes: 30, ContractHours: 8, ContractParticipants: 4, CollisionMinutes: 90, ArtifactOfflineDays: 7},
 		GuestRetentionDays: 14, ReconnectSeconds: 10,
 	}
 }
@@ -147,6 +154,7 @@ func (c Config) Rules() game.Rules {
 		CollisionInterval:         durationMinutes(c.Events.CollisionMinutes, 90),
 		PirateDuration:            durationMinutes(c.Events.PirateMinutes, 5),
 		GuestRetention:            durationDays(c.GuestRetentionDays, 14),
+		ArtifactOfflineRelease:    durationDays(c.Events.ArtifactOfflineDays, 7),
 	}
 }
 
@@ -180,6 +188,33 @@ func validate(c Config) error {
 	if c.Database == "" {
 		return errors.New("database is required")
 	}
+	for name, value := range map[string]int{
+		"progression.base_minutes":             c.Progression.BaseMinutes,
+		"progression.level_step_minutes":       c.Progression.LevelStepMinutes,
+		"penalty.speech_base_seconds":          c.Penalty.SpeechBaseSeconds,
+		"penalty.speech_per_level_seconds":     c.Penalty.SpeechPerLevelSeconds,
+		"penalty.speech_per_character_seconds": c.Penalty.SpeechPerCharacterSeconds,
+		"penalty.action_base_seconds":          c.Penalty.ActionBaseSeconds,
+		"penalty.action_per_level_seconds":     c.Penalty.ActionPerLevelSeconds,
+		"penalty.action_per_character_seconds": c.Penalty.ActionPerCharacterSeconds,
+		"penalty.nick_seconds":                 c.Penalty.NickSeconds,
+		"penalty.part_seconds":                 c.Penalty.PartSeconds,
+		"penalty.quit_seconds":                 c.Penalty.QuitSeconds,
+		"penalty.kick_seconds":                 c.Penalty.KickSeconds,
+		"events.encounter_minutes":             c.Events.EncounterMinutes,
+		"events.city_event_minutes":            c.Events.CityEventMinutes,
+		"events.pirate_minutes":                c.Events.PirateMinutes,
+		"events.district_hours":                c.Events.DistrictHours,
+		"events.heat_decay_minutes":            c.Events.HeatDecayMinutes,
+		"events.contract_hours":                c.Events.ContractHours,
+		"events.contract_participants":         c.Events.ContractParticipants,
+		"events.collision_minutes":             c.Events.CollisionMinutes,
+		"events.artifact_offline_days":         c.Events.ArtifactOfflineDays,
+	} {
+		if value < 0 {
+			return fmt.Errorf("%s must not be negative", name)
+		}
+	}
 	return nil
 }
 
@@ -192,7 +227,22 @@ func applyEnv(c *Config) error {
 	str("NEONGRID_DATABASE", &c.Database)
 	str("NEONGRID_WEB_LISTEN", &c.WebListen)
 	str("NEONGRID_NICKSERV_NAME", &c.NickServ.Name)
+	str("NEONGRID_NICKSERV_ACCOUNT", &c.NickServ.Account)
 	str("NEONGRID_NICKSERV_PASSWORD", &c.NickServ.Password)
+	if value, ok := os.LookupEnv("NEONGRID_ADMIN_ACCOUNTS"); ok {
+		c.AdminAccounts = nil
+		for _, account := range strings.Split(value, ",") {
+			if account = strings.TrimSpace(account); account != "" {
+				c.AdminAccounts = append(c.AdminAccounts, account)
+			}
+		}
+	}
+	if err := boolEnv("NEONGRID_NICKSERV_SASL", &c.NickServ.SASL); err != nil {
+		return err
+	}
+	if err := boolEnv("NEONGRID_TLS_LEGACY_FALLBACK", &c.TLSLegacyFallback); err != nil {
+		return err
+	}
 	str("NEONGRID_NICKSERV_IDENTIFY_COMMAND", &c.NickServ.IdentifyCommand)
 	if err := intEnv("NEONGRID_PORT", &c.Port); err != nil {
 		return err
@@ -269,7 +319,10 @@ func applyEnv(c *Config) error {
 	if err := intEnv("NEONGRID_EVENTS_CONTRACT_PARTICIPANTS", &c.Events.ContractParticipants); err != nil {
 		return err
 	}
-	return intEnv("NEONGRID_EVENTS_COLLISION_MINUTES", &c.Events.CollisionMinutes)
+	if err := intEnv("NEONGRID_EVENTS_COLLISION_MINUTES", &c.Events.CollisionMinutes); err != nil {
+		return err
+	}
+	return intEnv("NEONGRID_EVENTS_ARTIFACT_OFFLINE_DAYS", &c.Events.ArtifactOfflineDays)
 }
 
 func str(name string, target *string) {

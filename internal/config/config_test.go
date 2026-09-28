@@ -39,3 +39,42 @@ func TestTLS12OnlyEnvironmentOverride(t *testing.T) {
 		t.Fatalf("web listen = %q, want 127.0.0.1:9090", cfg.WebListen)
 	}
 }
+
+func TestSecurityDefaultsAndAdminEnvironment(t *testing.T) {
+	cfg := Defaults()
+	if !cfg.NickServ.SASL || cfg.TLSLegacyFallback {
+		t.Fatalf("defaults: sasl=%v legacy fallback=%v", cfg.NickServ.SASL, cfg.TLSLegacyFallback)
+	}
+	t.Setenv("NEONGRID_ADMIN_ACCOUNTS", " root, ,gridadmin ")
+	t.Setenv("NEONGRID_TLS_LEGACY_FALLBACK", "true")
+	if err := applyEnv(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.AdminAccounts) != 2 || cfg.AdminAccounts[0] != "root" || cfg.AdminAccounts[1] != "gridadmin" {
+		t.Fatalf("admin accounts = %#v", cfg.AdminAccounts)
+	}
+	if !cfg.TLSLegacyFallback {
+		t.Fatal("legacy fallback was not enabled by environment")
+	}
+}
+
+func TestNegativeTuningIsRejected(t *testing.T) {
+	t.Setenv("NEONGRID_PENALTY_SPEECH_BASE_SECONDS", "-30")
+	if _, err := Load(""); err == nil {
+		t.Fatal("negative speech penalty was accepted")
+	}
+}
+
+func TestArtifactOfflineDays(t *testing.T) {
+	if got := Defaults().Rules().ArtifactOfflineRelease; got != 7*24*time.Hour {
+		t.Fatalf("default artifact release = %s, want 7 days", got)
+	}
+	t.Setenv("NEONGRID_EVENTS_ARTIFACT_OFFLINE_DAYS", "3")
+	cfg := Defaults()
+	if err := applyEnv(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Rules().ArtifactOfflineRelease; got != 3*24*time.Hour {
+		t.Fatalf("artifact release = %s, want 3 days", got)
+	}
+}

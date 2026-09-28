@@ -62,11 +62,21 @@ func main() {
 func runScheduler(ctx context.Context, engine *game.Engine, bot *irc.Bot, seconds int) {
 	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
 	defer ticker.Stop()
+	wasReady := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			// The world only advances while the bot has been in the channel
+			// for a full tick: announcements would otherwise be lost, and
+			// contracts would resolve before NAMES has restored the roster.
+			ready := bot.Maintain(now)
+			settled := ready && wasReady
+			wasReady = ready
+			if !settled {
+				continue
+			}
 			messages, err := engine.Tick(now)
 			if err != nil {
 				log.Printf("game tick: %v", err)

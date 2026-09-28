@@ -59,3 +59,15 @@ Build a small Go IRC idle-RPG bot for `#neongrid`: runners progress while connec
 6. **Passive runner collisions done:** connected runners can collide automatically in bounded hacks, races, hunts, and drone incidents shaped by gear, faction, district, and Heat.
 7. **Cyberware scars and titles done:** rare passive incidents can leave persistent quirks, while Rep, Heat, and survival milestones award cosmetic titles.
 8. **Read-only web observer done:** an opt-in standard-library page shows active runners, Rep rankings, world state, districts, and recent incidents; IRC remains the game.
+
+## Review hardening
+
+**Done:** runners are matched by nick only while connected; account switches and unrelated accounts no longer take over other runners; a nick change onto another guest's offline nick is still tracked; level-up and title announcements are queued rather than lost to status or observer calls; private-message commands reply to the sender; commands and penalty notices are rate-limited; the bot rejoins after a kick or part and reconciles the channel roster; SASL is preferred over NickServ IDENTIFY; aliases are unique; netsplits and bot outages no longer fail contracts or penalize runners; the observer no longer writes to the database; SQLite uses WAL; legacy TLS fallback is opt-in.
+
+## Balance pass
+
+**Done:** ICE odds are level-relative (gear against an on-level loadout); uniques rate above on-level gear, burn out after 4–8 levels, and return to the drop pool with a fresh drop-table roll; titles cover Rep, Heat, district, ICE, collision, contract, and artifact milestones, with one shown title chosen by prestige or `!title`; artifacts held by a runner offline longer than `events.artifact_offline_days` (default 7) return to the pool; overdue timers are staggered on rejoin. Contracts keep their risk-heavy payout by design.
+
+## Entertainment pass
+
+**Done:** message pools for encounters (named ICE, district-specific locations), collisions, drifts, city events, contracts, and level-ups; collisions prefer the same district; contract failures resolve on the next tick and name who dropped. New systems: hot/cold stance, rivalries, artifact theft, weekly faction champion, pirate-frequency dead drops, Blackwall co-op raids, Ghost Protocol streaks, and a daily bulletin. Rep titles are spread to 5/50/100/150/250 so they last past the first week.
